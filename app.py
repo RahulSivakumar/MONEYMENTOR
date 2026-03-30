@@ -34,15 +34,21 @@ if uploaded_file:
     if uploaded_file.name.endswith('.xlsx'):
         df = pd.read_excel(uploaded_file)
     elif uploaded_file.name.endswith('.pdf'):
-        with pdfplumber.open(uploaded_file) as pdf:
-            all_rows = []
-            for page in pdf.pages:
-                table = page.extract_table()
-                if table:
-                    all_rows.extend(table)
-            if all_rows:
-                # Use first row as header
-                df = pd.DataFrame(all_rows[1:], columns=all_rows[0])
+        # Add a text input for the password (it will be hidden as you type)
+        pdf_password = st.text_input("Enter PDF Password (if any)", type="password")
+        
+        try:
+            # We try to open with the password provided
+            with pdfplumber.open(uploaded_file, password=pdf_password) as pdf:
+                all_rows = []
+                for page in pdf.pages:
+                    table = page.extract_table()
+                    if table:
+                        all_rows.extend(table)
+                if all_rows:
+                    df = pd.DataFrame(all_rows[1:], columns=all_rows[0])
+        except Exception as e:
+            st.error("Could not open PDF. If it's password protected, please enter it above.")
 
     if df is not None:
         st.write("### Raw Data Preview", df.head())

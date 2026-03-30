@@ -15,15 +15,6 @@ import pandas as pd
 import pdfplumber
 import re
 
-st.title("MONEYMENTOR: Bank Statement Upload")
-
-uploaded_file = st.file_uploader("Upload your Bank Statement", type=['pdf', 'xlsx'])
-
-import streamlit as st
-import pandas as pd
-import pdfplumber
-import re
-
 # --- HELPER FUNCTIONS ---
 def clean_currency(value):
     """Safely converts bank statement strings (₹1,250.00, -, None) to numbers."""

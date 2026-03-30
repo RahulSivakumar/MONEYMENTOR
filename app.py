@@ -20,15 +20,25 @@ st.title("MONEYMENTOR: Bank Statement Upload")
 uploaded_file = st.file_uploader("Upload your Bank Statement", type=['pdf', 'xlsx'])
 
 def clean_currency(value):
-    """Removes currency symbols and commas, converting to float."""
-    if pd.isna(value) or value == "":
+    """Safely converts bank statement strings to numbers."""
+    if value is None or pd.isna(value):
         return 0.0
-    # Remove everything except numbers and dots
-    cleaned = re.sub(r'[^\d.]', '', str(value))
-    return float(cleaned) if cleaned else 0.0
-
-if uploaded_file:
-    df = None
+    
+    # Convert to string and strip whitespace
+    val_str = str(value).strip()
+    
+    # If the cell is empty or just a dash, return 0
+    if not val_str or val_str == '-':
+        return 0.0
+    
+    # Remove everything except numbers and a single decimal point
+    # This handles symbols like ₹, $, commas, and extra spaces
+    cleaned = re.sub(r'[^\d.]', '', val_str)
+    
+    try:
+        return float(cleaned)
+    except ValueError:
+        return 0.0
     
     # --- STEP 1: LOAD DATA ---
     if uploaded_file.name.endswith('.xlsx'):

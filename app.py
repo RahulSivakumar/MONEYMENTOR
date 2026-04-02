@@ -6,20 +6,13 @@ import plotly.express as px
 # --- 1. CONFIG & STYLE ---
 st.set_page_config(page_title="Project MONEYMENTOR", layout="wide")
 
-# FIX: Changed unsafe_allow_index to unsafe_allow_html
-# --- REPLACE THE OLD st.markdown BLOCK WITH THIS ---
 st.markdown("""
     <style>
     .stSelectbox { margin-top: -15px; }
     .transaction-row { border-bottom: 1px solid #f0f2f6; padding: 10px 0; }
     
-    /* FIX: Force metric text and labels to be visible */
-    [data-testid="stMetricValue"] {
-        color: #1f77b4 !important;
-    }
-    [data-testid="stMetricLabel"] {
-        color: #555555 !important;
-    }
+    [data-testid="stMetricValue"] { color: #1f77b4 !important; }
+    [data-testid="stMetricLabel"] { color: #555555 !important; }
     
     .stMetric { 
         background-color: #ffffff; 
@@ -29,13 +22,17 @@ st.markdown("""
     }
     </style>
     """, unsafe_allow_html=True)
-# --- 2. SIDEBAR: CATEGORY MANAGER ---
+
+# --- 2. SIDEBAR: SETTINGS ---
 with st.sidebar:
-    st.header("⚙️ Category Manager")
+    st.header("⚙️ Project Settings")
+    # Adding the Opening Balance input you needed
+    opening_bal = st.number_input("Opening Balance (₹)", value=0.0, step=500.0)
     
-    # Initialize categories in session state if not present
+    st.divider()
+    st.header("🏷️ Category Manager")
     if 'categories' not in st.session_state:
-        st.session_state.categories = ["Food & Dining", "Shopping", "Transport", "Investments", "Bills", "Salary", "Others"]
+        st.session_state.categories = ["Food & Dining", "Shopping", "Transport", "Bills", "Salary", "Investments", "Others"]
     
     new_cat = st.text_input("Add New Category", placeholder="e.g. Health")
     if st.button("Add Category") and new_cat:
@@ -43,19 +40,8 @@ with st.sidebar:
             st.session_state.categories.append(new_cat)
             st.rerun()
 
-    st.divider()
-    st.write("### Manage Existing")
-    for i, cat in enumerate(st.session_state.categories):
-        cols = st.columns([3, 1])
-        cols[0].text(cat)
-        # Using unique keys for delete buttons to avoid Duplicate ID errors
-        if cols[1].button("🗑️", key=f"del_btn_{i}"):
-            st.session_state.categories.pop(i)
-            st.rerun()
-
 # --- 3. HELPER FUNCTIONS ---
 def clean_currency(value):
-    """Removes ₹ symbols and commas, handles negative values in brackets."""
     if pd.isna(value) or str(value).strip() == "":
         return 0.0
     val_str = str(value).replace('₹', '').replace(',', '').replace(' ', '').strip()
@@ -68,120 +54,89 @@ def clean_currency(value):
 
 # --- 4. MAIN UI ---
 st.title("💰 Project MONEYMENTOR")
-st.info("Upload your bank statement to begin automated analysis.")
-
-uploaded_file = st.file_uploader("Upload Statement (PDF, Excel, or CSV)", type=['pdf', 'xlsx', 'xls', 'csv'])
+uploaded_file = st.file_uploader("Upload Statement", type=['pdf', 'xlsx', 'xls', 'csv'])
 
 if uploaded_file:
     try:
-        # DATA EXTRACTION LOGIC
+        # DATA EXTRACTION
         if uploaded_file.name.endswith('.pdf'):
             with pdfplumber.open(uploaded_file) as pdf:
                 all_data = []
                 for page in pdf.pages:
                     table = page.extract_table()
-                    if table:
-                        all_data.extend(table)
+                    if table: all_data.extend(table)
                 df = pd.DataFrame(all_data[1:], columns=all_data[0])
         else:
             df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith(('xls', 'xlsx')) else pd.read_csv(uploaded_file)
 
-        # CLEANUP COLUMNS
         df.columns = [str(c).strip() for c in df.columns]
         desc_col = next((c for c in df.columns if any(k in c.lower() for k in ["desc", "detail", "narration"])), None)
         debit_col = next((c for c in df.columns if any(k in c.lower() for k in ["debit", "withdrawal", "dr"])), None)
         credit_col = next((c for c in df.columns if any(k in c.lower() for k in ["credit", "deposit", "cr"])), None)
 
         if not desc_col:
-            st.warning("Could not automatically find a 'Description' column. Please check your file format.")
+            st.warning("Could not find Description column.")
             st.stop()
 
         # --- 5. TRANSACTION REVIEW GRID ---
         st.subheader("📋 Step 1: Categorize Transactions")
-        
-        # Header for the manual review table
-        h_col1, h_col2, h_col3 = st.columns([3, 1, 1.5])
+        h_col1, h_col2, h_col3 = st.columns([3, 1.2, 1.3])
         h_col1.markdown("**Description**")
-        h_col2.markdown("**Amount**")
+        h_col2.markdown("**Amount & Type**")
         h_col3.markdown("**Category**")
         st.divider()
 
         final_rows = []
+        # THE LOOP STARTS HERE
         for index, row in df.iterrows():
             description = str(row[desc_col])
-            # Handle both Debit and Credit columns if they exist
             dr = clean_currency(row[debit_col]) if debit_col else 0.0
             cr = clean_currency(row[credit_col]) if credit_col else 0.0
             
-            # Use total absolute value for the line item
-            amount = dr if dr != 0 else cr
-            
-            # FIX: Ensure every widget in this loop has a unique 'key' based on index
-            # --- PASTE THIS INSIDE THE LOOP ---
-    with st.container():
-        # Using [3, 1.2, 1.3] gives more room for the Debit/Credit labels
-        c1, c2, c3 = st.columns([3, 1.2, 1.3])
-        
-        # Column 1: Transaction Name
-        c1.write(description[:65])
-        
-        # Column 2: The Color-Coded Amount
-        if dr > 0:
-            c2.write(f"**₹{dr:,.2f}**")
-            c2.markdown('<span style="color: #ff4b4b;">🔴 DEBIT (Out)</span>', unsafe_allow_html=True)
-            amt_val, row_type = dr, "Expense"
-        else:
-            c2.write(f"**₹{cr:,.2f}**")
-            c2.markdown('<span style="color: #00c853;">🟢 CREDIT (In)</span>', unsafe_allow_html=True)
-            amt_val, row_type = cr, "Income"
-        
-        # Column 3: The Dropdown
-        selected_cat = c3.selectbox(
-            "Tag", 
-            st.session_state.categories, 
-            key=f"row_{index}", 
-            label_visibility="collapsed"
-        )
-        
-        # Make sure this matches your existing list name (usually final_rows)
-        final_rows.append({"Category": selected_cat, "Amount": amt_val, "Type": row_type})
+            # EVERYTHING INSIDE THE LOOP MUST BE INDENTED
+            with st.container():
+                c1, c2, c3 = st.columns([3, 1.2, 1.3])
+                c1.write(description[:65])
+                
+                if dr > 0:
+                    c2.write(f"**₹{dr:,.2f}**")
+                    c2.markdown('<span style="color: #ff4b4b;">🔴 DEBIT (Out)</span>', unsafe_allow_html=True)
+                    amt_val, row_type = dr, "Expense"
+                else:
+                    c2.write(f"**₹{cr:,.2f}**")
+                    c2.markdown('<span style="color: #00c853;">🟢 CREDIT (In)</span>', unsafe_allow_html=True)
+                    amt_val, row_type = cr, "Income"
+                
+                selected_cat = c3.selectbox(
+                    "Tag", st.session_state.categories, 
+                    key=f"row_{index}", label_visibility="collapsed"
+                )
+                final_rows.append({"Category": selected_cat, "Amount": amt_val, "Type": row_type})
 
-        # --- 6. ANALYTICS & IMPROVED PIE CHART ---
+        # --- 6. ANALYTICS ---
         if final_rows:
             st.divider()
             st.subheader("📊 Step 2: Financial Insights")
+            res_df = pd.DataFrame(final_rows)
             
-            results_df = pd.DataFrame(final_rows)
-            
-            # Metrics
-            total_spent = results_df[results_df['Type'] == "Expense"]['Amount'].sum()
-            total_income = results_df[results_df['Type'] == "Income"]['Amount'].sum()
-            
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Total Expenses", f"₹{total_spent:,.2f}")
-            m2.metric("Total Income", f"₹{total_income:,.2f}")
-            m3.metric("Net Flow", f"₹{(total_income - total_spent):,.2f}")
+            spent = res_df[res_df['Type'] == "Expense"]['Amount'].sum()
+            income = res_df[res_df['Type'] == "Income"]['Amount'].sum()
+            net = income - spent
+            closing = opening_bal + net
 
-            # Pie Chart with Professional Pastel Colors
-            expense_summary = results_df[results_df['Type'] == "Expense"].groupby("Category")["Amount"].sum().reset_index()
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Opening Bal", f"₹{opening_bal:,.2f}")
+            m2.metric("Total Expenses", f"₹{spent:,.2f}")
+            m3.metric("Net Flow", f"₹{net:,.2f}")
+            m4.metric("Closing Bal", f"₹{closing:,.2f}")
 
-            if not expense_summary.empty:
-                fig = px.pie(
-                    expense_summary, 
-                    values='Amount', 
-                    names='Category',
-                    hole=0.5,
-                    color_discrete_sequence=px.colors.qualitative.Pastel,
-                    template="plotly_white"
-                )
-                fig.update_traces(textposition='inside', textinfo='percent+label')
-                fig.update_layout(margin=dict(t=30, b=0, l=0, r=0))
+            exp_sum = res_df[res_df['Type'] == "Expense"].groupby("Category")["Amount"].sum().reset_index()
+            if not exp_sum.empty:
+                fig = px.pie(exp_sum, values='Amount', names='Category', hole=0.5, 
+                             color_discrete_sequence=px.colors.qualitative.Pastel)
                 st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.write("No expenses found to visualize.")
 
     except Exception as e:
         st.error(f"Something went wrong: {e}")
-
 else:
     st.write("Waiting for a file...")

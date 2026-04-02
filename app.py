@@ -117,24 +117,34 @@ if uploaded_file:
             amount = dr if dr != 0 else cr
             
             # FIX: Ensure every widget in this loop has a unique 'key' based on index
-            with st.container():
-                c1, c2, c3 = st.columns([3, 1, 1.5])
-                c1.write(description[:60]) # Truncate for UI alignment
-                c2.write(f"₹{amount:,.2f}")
-                
-                # Dropdown using session state categories
-                selected_cat = c3.selectbox(
-                    "Category", 
-                    st.session_state.categories, 
-                    key=f"select_row_{index}", # Unique ID fix
-                    label_visibility="collapsed"
-                )
-                
-                final_rows.append({
-                    "Category": selected_cat, 
-                    "Amount": amount, 
-                    "Type": "Expense" if dr > 0 else "Income"
-                })
+            # --- PASTE THIS INSIDE THE LOOP ---
+    with st.container():
+        # Using [3, 1.2, 1.3] gives more room for the Debit/Credit labels
+        c1, c2, c3 = st.columns([3, 1.2, 1.3])
+        
+        # Column 1: Transaction Name
+        c1.write(description[:65])
+        
+        # Column 2: The Color-Coded Amount
+        if dr > 0:
+            c2.write(f"**₹{dr:,.2f}**")
+            c2.markdown('<span style="color: #ff4b4b;">🔴 DEBIT (Out)</span>', unsafe_allow_html=True)
+            amt_val, row_type = dr, "Expense"
+        else:
+            c2.write(f"**₹{cr:,.2f}**")
+            c2.markdown('<span style="color: #00c853;">🟢 CREDIT (In)</span>', unsafe_allow_html=True)
+            amt_val, row_type = cr, "Income"
+        
+        # Column 3: The Dropdown
+        selected_cat = c3.selectbox(
+            "Tag", 
+            st.session_state.categories, 
+            key=f"row_{index}", 
+            label_visibility="collapsed"
+        )
+        
+        # Make sure this matches your existing list name (usually final_rows)
+        final_rows.append({"Category": selected_cat, "Amount": amt_val, "Type": row_type})
 
         # --- 6. ANALYTICS & IMPROVED PIE CHART ---
         if final_rows:

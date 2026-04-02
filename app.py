@@ -7,14 +7,28 @@ import plotly.express as px
 st.set_page_config(page_title="Project MONEYMENTOR", layout="wide")
 
 # FIX: Changed unsafe_allow_index to unsafe_allow_html
+# --- REPLACE THE OLD st.markdown BLOCK WITH THIS ---
 st.markdown("""
     <style>
     .stSelectbox { margin-top: -15px; }
     .transaction-row { border-bottom: 1px solid #f0f2f6; padding: 10px 0; }
-    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    
+    /* FIX: Force metric text and labels to be visible */
+    [data-testid="stMetricValue"] {
+        color: #1f77b4 !important;
+    }
+    [data-testid="stMetricLabel"] {
+        color: #555555 !important;
+    }
+    
+    .stMetric { 
+        background-color: #ffffff; 
+        padding: 15px; 
+        border-radius: 10px; 
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05); 
+    }
     </style>
     """, unsafe_allow_html=True)
-
 # --- 2. SIDEBAR: CATEGORY MANAGER ---
 with st.sidebar:
     st.header("⚙️ Category Manager")

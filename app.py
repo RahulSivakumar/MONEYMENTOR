@@ -117,16 +117,24 @@ if uploaded_file:
             amount = dr if dr != 0 else cr
             
             # FIX: Ensure every widget in this loop has a unique 'key' based on index
+            # --- REPLACE STARTING AT LINE 121 ---
             with st.container():
                 c1, c2, c3 = st.columns([3, 1, 1.5])
                 c1.write(description[:60]) # Truncate for UI alignment
-                c2.write(f"₹{amount:,.2f}")
+                
+                # Show the amount with the color-coded type underneath
+                if dr > 0:
+                    c2.write(f"₹{dr:,.2f}")
+                    c2.markdown('<p style="color: #ff4b4b; font-size: 0.8rem; margin-top: -15px;">🔴 DEBIT</p>', unsafe_allow_html=True)
+                else:
+                    c2.write(f"₹{cr:,.2f}")
+                    c2.markdown('<p style="color: #00c853; font-size: 0.8rem; margin-top: -15px;">🟢 CREDIT</p>', unsafe_allow_html=True)
                 
                 # Dropdown using session state categories
                 selected_cat = c3.selectbox(
                     "Category", 
                     st.session_state.categories, 
-                    key=f"select_row_{index}", # Unique ID fix
+                    key=f"select_row_{index}", 
                     label_visibility="collapsed"
                 )
                 

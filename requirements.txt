@@ -3,3 +3,5 @@ pandas
 pdfplumber
 openpyxl
 plotly
+openai
+langchain-openai

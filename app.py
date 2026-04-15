@@ -133,7 +133,7 @@ if uploaded_file:
             m1.metric("Opening Balance", f"₹{opening_bal:,.2f}")
             m2.metric("Total Income", f"₹{total_income:,.2f}")
             m3.metric("Total Expenses", f"₹{total_spent:,.2f}", delta_color="inverse")
-            m4.metric("Estimated Closing", f"₹{closing_bal:,.2f}", delta=f"₹{net_change:,.2f}")
+            m4.metric("Closing/Current balance", f"₹{closing_bal:,.2f}", delta=f"₹{net_change:,.2f}")
 
             col_left, col_right = st.columns(2)
             with col_left:

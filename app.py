@@ -1,47 +1,53 @@
 import streamlit as st
 import pandas as pd
+import pdfplumber
+import plotly.express as px
 from openai import OpenAI
 
-# --- 1. CONFIG & AI SETUP ---
+# --- 1. SETTINGS & AI CONNECTION ---
 st.set_page_config(page_title="Project MONEYMENTOR", layout="wide", page_icon="💰")
 
-# SAFETY CHECK: This prevents the "KeyError" crash if secrets.toml isn't found
+# Securely connect to the AI "Brain"
 if "OPENAI_API_KEY" in st.secrets:
     client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 else:
-    st.error("❌ API Key not found! Please check your .streamlit/secrets.toml file.")
+    st.error("❌ API Key Missing: Create .streamlit/secrets.toml with your key.")
     st.stop()
 
 # --- 2. SIDEBAR: THE MANDATORY GATE ---
 with st.sidebar:
-    st.title("🛡️ MoneyMentor Control")
+    st.title("🛡️ Control Center")
     st.header("📊 Initial Balance")
     
-    # This is the gatekeeper
-    opening_bal = st.number_input("Enter Opening Balance (₹)", value=0.0, step=100.0)
+    # MANDATORY GATE: The rest of the app is hidden until this is > 0
+    opening_bal = st.number_input("Enter Opening Balance (₹)", value=0.0, step=100.0, 
+                                  help="The math needs a starting point. Check your statement for 'Balance B/F'.")
     
     st.divider()
     
+    # Category Manager
     if 'categories' not in st.session_state:
         st.session_state.categories = ["Food & Dining", "Shopping", "Transport", "Investments", "Bills", "Salary", "Others"]
     
+    st.header("⚙️ Categories")
     new_cat = st.text_input("Add New Category")
-    if st.button("Add Category") and new_cat:
+    if st.button("Add", use_container_width=True) and new_cat:
         if new_cat not in st.session_state.categories:
             st.session_state.categories.append(new_cat)
             st.rerun()
 
 # --- 3. HELPER FUNCTIONS ---
 def get_ai_category(description):
-    """Asks the AI to pick a category from your list."""
+    """Predicts category using OpenAI. Saves result to prevent double-billing."""
     try:
-        prompt = f"Categorize: '{description}'. Choices: {', '.join(st.session_state.categories)}. Return ONLY the category name."
+        prompt = f"Categorize this bank transaction: '{description}'. Pick ONLY from: {', '.join(st.session_state.categories)}. Reply with just the name."
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=15
         )
-        return response.choices[0].message.content.strip()
+        prediction = response.choices[0].message.content.strip()
+        return prediction if prediction in st.session_state.categories else "Others"
     except Exception:
         return "Others"
 
@@ -51,60 +57,83 @@ def clean_currency(value):
     try: return float(val_str)
     except: return 0.0
 
-# --- 4. MAIN LOGIC ---
+# --- 4. MAIN APP LOGIC ---
 st.title("💰 Project MONEYMENTOR")
 
-# THE GATEKEEPER CHECK
 if opening_bal <= 0:
-    st.warning("👈 **Action Required:** Please enter your **Opening Balance** in the sidebar to begin.")
-    st.info("The math won't 'math' without a starting balance!")
+    st.warning("👈 **Action Required:** Enter your **Opening Balance** in the sidebar to unlock the analyzer.")
+    st.info("The logic remains locked until the starting math is defined.")
 else:
-    # This only shows once Balance > 0
-    uploaded_file = st.file_uploader("Upload your Bank Statement", type=['xlsx', 'csv'])
+    # THE GATE IS OPEN
+    uploaded_file = st.file_uploader("Drop your bank statement here", type=['pdf', 'xlsx', 'csv'])
 
     if uploaded_file:
-        # Load data
-        df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('xlsx') else pd.read_csv(uploaded_file)
-        
-        # Simple column detection
-        desc_col = next((c for c in df.columns if any(k in c.lower() for k in ["desc", "detail", "narration"])), df.columns[0])
-        amt_col = next((c for c in df.columns if any(k in c.lower() for k in ["amount", "withdrawal", "debit"])), df.columns[1])
+        try:
+            # Data Extraction
+            if uploaded_file.name.endswith('.pdf'):
+                with pdfplumber.open(uploaded_file) as pdf:
+                    all_data = []
+                    for page in pdf.pages:
+                        table = page.extract_table()
+                        if table: all_data.extend(table)
+                    df = pd.DataFrame(all_data[1:], columns=all_data[0])
+            elif uploaded_file.name.endswith('.xlsx'):
+                df = pd.read_excel(uploaded_file)
+            else:
+                df = pd.read_csv(uploaded_file)
 
-        st.subheader("📋 Transactions (AI-Categorized)")
-        final_rows = []
+            # Cleanup Columns
+            df.columns = [str(c).strip() for c in df.columns]
+            desc_col = next((c for c in df.columns if any(k in c.lower() for k in ["desc", "detail", "narration"])), None)
+            amt_col = next((c for c in df.columns if any(k in c.lower() for k in ["amount", "withdrawal", "debit"])), None)
 
-        # Create the grid
-        for index, row in df.iterrows():
-            desc = str(row[desc_col])[:50]
-            amt = clean_currency(row[amt_col])
-            if amt == 0: continue
+            if not desc_col or not amt_col:
+                st.error("Could not find Description or Amount columns.")
+                st.stop()
 
-            # AI Logic: Cache the result so we don't pay for the same row twice
-            state_key = f"cat_id_{index}"
-            if state_key not in st.session_state:
-                with st.spinner('AI Thinking...'):
-                    st.session_state[state_key] = get_ai_category(desc)
+            # --- 5. TRANSACTION GRID WITH AI PRE-FILL ---
+            st.subheader("📋 Verify & Categorize")
+            final_rows = []
 
-            with st.container():
-                c1, c2, c3 = st.columns([3, 1, 2])
-                c1.write(f"**{desc}**")
-                c2.write(f"₹{amt:,.2f}")
+            for index, row in df.iterrows():
+                desc = str(row[desc_col])[:50]
+                amt = clean_currency(row[amt_col])
+                if amt == 0: continue
+
+                # AI Categorization: Only run once per session to save money
+                state_key = f"cat_v1_{index}"
+                if state_key not in st.session_state:
+                    with st.spinner('AI analyzing...'):
+                        st.session_state[state_key] = get_ai_category(desc)
+
+                with st.container():
+                    c1, c2, c3 = st.columns([3, 1, 1.5])
+                    c1.write(f"**{desc}**")
+                    c2.write(f"₹{amt:,.2f}")
+                    
+                    # Dropdown defaults to AI's suggestion
+                    ai_suggestion = st.session_state[state_key]
+                    idx = st.session_state.categories.index(ai_suggestion) if ai_suggestion in st.session_state.categories else 0
+                    
+                    selected_cat = c3.selectbox("Cat", st.session_state.categories, index=idx, key=f"sel_{index}", label_visibility="collapsed")
+                    final_rows.append({"Amount": amt, "Category": selected_cat})
+
+            # --- 6. THE RESULTS ---
+            if final_rows:
+                res_df = pd.DataFrame(final_rows)
+                total_spent = res_df['Amount'].sum()
+                closing_bal = opening_bal - total_spent
                 
-                # Pre-select the AI's suggestion
-                current_ai_pick = st.session_state[state_key]
-                idx = st.session_state.categories.index(current_ai_pick) if current_ai_pick in st.session_state.categories else 0
-                
-                selected_cat = c3.selectbox("Cat", st.session_state.categories, index=idx, key=f"select_{index}", label_visibility="collapsed")
-                
-                final_rows.append({"Amount": amt, "Category": selected_cat})
+                st.divider()
+                st.subheader("📊 Reconciliation Summary")
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Opening Balance", f"₹{opening_bal:,.2f}")
+                m2.metric("Total Expenses", f"₹{total_spent:,.2f}", delta_color="inverse")
+                m3.metric("Current Balance", f"₹{closing_bal:,.2f}", delta=f"-₹{total_spent:,.2f}")
 
-        # --- 5. THE RESULTS ---
-        if final_rows:
-            res_df = pd.DataFrame(final_rows)
-            total_spent = res_df['Amount'].sum()
-            current_total = opening_bal - total_spent
-            
-            st.divider()
-            col1, col2 = st.columns(2)
-            col1.metric("Opening Balance", f"₹{opening_bal:,.2f}")
-            col2.metric("New Balance", f"₹{current_total:,.2f}", delta=f"-₹{total_spent:,.2f}", delta_color="inverse")
+                # Simple Chart
+                fig = px.pie(res_df, values='Amount', names='Category', hole=0.5, title="Spending Breakdown")
+                st.plotly_chart(fig, use_container_width=True)
+
+        except Exception as e:
+            st.error(f"Error processing file: {e}")

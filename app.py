@@ -6,36 +6,26 @@ import plotly.express as px
 # --- 1. CONFIG & STYLE ---
 st.set_page_config(page_title="Project MONEYMENTOR", layout="wide", page_icon="💰")
 
-# Custom CSS for a modern FinTech look
 st.markdown("""
     <style>
-    /* Card-like styling for transactions */
-    .transaction-card {
-        background-color: #ffffff;
-        padding: 15px;
-        border-radius: 10px;
-        border-left: 5px solid #dfe3e6;
-        margin-bottom: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }
     .status-debit { color: #d32f2f; font-weight: bold; }
     .status-credit { color: #2e7d32; font-weight: bold; }
-    
-    /* Metric Styling */
-    [data-testid="stMetricValue"] { font-size: 24px; }
-    
-    /* Clean Selectbox */
-    .stSelectbox div[data-baseweb="select"] {
-        margin-top: -10px;
-    }
+    [data-testid="stMetricValue"] { font-size: 22px; font-weight: 700; }
+    .stNumberInput { margin-bottom: 20px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. SIDEBAR: CATEGORY MANAGER ---
+# --- 2. SIDEBAR: SETTINGS & BALANCES ---
 with st.sidebar:
-    st.title("Settings")
-    st.header("⚙️ Category Manager")
+    st.title("🛡️ MoneyMentor Control")
     
+    # NEW: Manual Opening Balance Input
+    st.header("📊 Initial Balance")
+    opening_bal = st.number_input("Enter Opening Balance (₹)", value=0.0, step=1000.0, help="Check your statement for the 'Opening Balance' or 'Balance B/F'.")
+    
+    st.divider()
+    
+    st.header("⚙️ Category Manager")
     if 'categories' not in st.session_state:
         st.session_state.categories = ["Food & Dining", "Shopping", "Transport", "Investments", "Bills", "Salary", "Others"]
     
@@ -67,7 +57,7 @@ def clean_currency(value):
 
 # --- 4. MAIN UI ---
 st.title("💰 Project MONEYMENTOR")
-st.caption("Advanced Bank Statement Intelligence")
+st.caption("Bank Statement Analyzer & Balance Reconciler")
 
 uploaded_file = st.file_uploader("Drop your statement here", type=['pdf', 'xlsx', 'xls', 'csv'])
 
@@ -97,8 +87,6 @@ if uploaded_file:
         st.subheader("📋 Verify Transactions")
         
         final_rows = []
-        
-        # Table Header
         h1, h2, h3, h4 = st.columns([3, 1, 1, 1.5])
         h1.write("**Description**")
         h2.write("**Type**")
@@ -111,71 +99,55 @@ if uploaded_file:
             dr = clean_currency(row[debit_col]) if debit_col else 0.0
             cr = clean_currency(row[credit_col]) if credit_col else 0.0
             
-            # Logic for color and labeling
             is_credit = cr > 0
             amount = cr if is_credit else dr
             label = "CREDIT" if is_credit else "DEBIT"
             color_class = "status-credit" if is_credit else "status-debit"
             icon = "➕" if is_credit else "➖"
 
+            # Skip zero-value rows
+            if amount == 0: continue
+
             with st.container():
                 c1, c2, c3, c4 = st.columns([3, 1, 1, 1.5])
-                
                 c1.write(f"**{description}**")
-                
-                # Dynamic Color Injection
                 c2.markdown(f'<span class="{color_class}">{icon} {label}</span>', unsafe_allow_html=True)
-                
                 c3.write(f"₹{amount:,.2f}")
+                selected_cat = c4.selectbox("Cat", st.session_state.categories, key=f"sel_{index}", label_visibility="collapsed")
                 
-                selected_cat = c4.selectbox(
-                    "Cat", 
-                    st.session_state.categories, 
-                    key=f"sel_{index}", 
-                    label_visibility="collapsed"
-                )
-                
-                final_rows.append({
-                    "Category": selected_cat, 
-                    "Amount": amount, 
-                    "Type": "Income" if is_credit else "Expense"
-                })
-                st.markdown('<div style="margin-bottom: 10px;"></div>', unsafe_allow_html=True)
+                final_rows.append({"Category": selected_cat, "Amount": amount, "Type": "Income" if is_credit else "Expense"})
+                st.markdown('<div style="margin-bottom: 5px; border-bottom: 1px solid #eee;"></div>', unsafe_allow_html=True)
 
-        # --- 6. ANALYTICS ---
+        # --- 6. ANALYTICS & MATH ---
         if final_rows:
             st.divider()
             res_df = pd.DataFrame(final_rows)
             
             total_spent = res_df[res_df['Type'] == "Expense"]['Amount'].sum()
             total_income = res_df[res_df['Type'] == "Income"]['Amount'].sum()
+            net_change = total_income - total_spent
+            closing_bal = opening_bal + net_change # THE CORE MATH
             
-            st.subheader("📊 Executive Summary")
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Outflow (Debits)", f"₹{total_spent:,.2f}", delta_color="inverse")
-            m2.metric("Inflow (Credits)", f"₹{total_income:,.2f}")
-            m3.metric("Net Savings", f"₹{(total_income - total_spent):,.2f}")
+            st.subheader("📊 Final Reconciliation")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Opening Balance", f"₹{opening_bal:,.2f}")
+            m2.metric("Total Income", f"₹{total_income:,.2f}")
+            m3.metric("Total Expenses", f"₹{total_spent:,.2f}", delta_color="inverse")
+            m4.metric("Estimated Closing", f"₹{closing_bal:,.2f}", delta=f"₹{net_change:,.2f}")
 
-            # Charts
             col_left, col_right = st.columns(2)
-            
             with col_left:
                 exp_df = res_df[res_df['Type'] == "Expense"].groupby("Category")["Amount"].sum().reset_index()
                 if not exp_df.empty:
-                    fig = px.pie(exp_df, values='Amount', names='Category', hole=0.6, 
-                                 title="Expense Distribution",
-                                 color_discrete_sequence=px.colors.qualitative.Safe)
+                    fig = px.pie(exp_df, values='Amount', names='Category', hole=0.6, title="Expense Distribution")
                     st.plotly_chart(fig, use_container_width=True)
-
             with col_right:
-                # Simple Bar Chart for Income vs Expense
-                summary_df = res_df.groupby("Type")["Amount"].sum().reset_index()
-                fig2 = px.bar(summary_df, x="Type", y="Amount", color="Type",
-                              color_discrete_map={"Income": "#2e7d32", "Expense": "#d32f2f"},
-                              title="Cash Flow Overview")
+                summary_df = pd.DataFrame({"Flow": ["Income", "Expense"], "Value": [total_income, total_spent]})
+                fig2 = px.bar(summary_df, x="Flow", y="Value", color="Flow", 
+                              color_discrete_map={"Income": "#2e7d32", "Expense": "#d32f2f"}, title="Cash Flow")
                 st.plotly_chart(fig2, use_container_width=True)
 
     except Exception as e:
         st.error(f"Error parsing file: {e}")
 else:
-    st.info("Please upload a file to see the magic happen.")
+    st.info("Upload your bank statement to see the math in action.")

@@ -7,6 +7,8 @@ from openai import OpenAI
 # --- 1. CONFIG & SECURE AI CONNECTION ---
 st.set_page_config(page_title="Project MONEYMENTOR", layout="wide", page_icon="💰")
 
+# AUTOMATION FIX: Streamlit will look into .streamlit/secrets.toml automatically
+# If not found, it falls back to None, which triggers our safety check.
 api_key = st.secrets.get("OPENAI_API_KEY")
 
 with st.sidebar:
@@ -16,9 +18,12 @@ with st.sidebar:
     
     st.divider()
     
+    # Only show input if secrets.toml is missing or empty
     if not api_key:
         st.warning("🔑 API Key not detected in secrets.toml")
         api_key = st.text_input("Paste OpenAI API Key here:", type="password")
+    else:
+        st.success("✅ API Key loaded from secrets")
     
     if not api_key:
         st.info("Please provide an API Key to enable AI categorization.")
@@ -31,22 +36,37 @@ if 'categories' not in st.session_state:
 
 # --- 2. IMPROVED AI LOGIC ---
 def get_ai_category(description):
-    """Refined prompt to ensure AI picks the most logical category."""
+    """Refined prompt with 'Reasoning' to avoid the 'Others' trap."""
     try:
+        # We give the AI a little more 'brain room' to think about the narration
         prompt = (
-            f"You are a financial assistant. Categorize this transaction description: '{description}'.\n"
-            f"Allowed Categories: {', '.join(st.session_state.categories)}.\n"
-            "Rules: Return ONLY the category name. If unsure, pick the closest match. Do not use 'Others' unless absolutely necessary."
+            f"Analyze this bank transaction narration: '{description}'.\n"
+            f"Select the most appropriate category from this list: {', '.join(st.session_state.categories)}.\n\n"
+            "Rules:\n"
+            "1. Output ONLY the category name.\n"
+            "2. If it's a UPI payment to a person, use 'UPI Transfer'.\n"
+            "3. If it mentions Zomato, Swiggy, or a Restaurant, use 'Food & Dining'.\n"
+            "4. If it mentions Amazon, Flipkart, or a Mall, use 'Shopping'.\n"
+            "5. Use 'Others' ONLY if the description is completely unintelligible."
         )
+        
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=[{"role": "system", "content": "You are a helpful banking assistant."},
-                      {"role": "user", "content": prompt}],
-            max_tokens=15,
-            temperature=0.3 # Lower temperature = more consistent results
+            messages=[
+                {"role": "system", "content": "You are a professional bank statement analyzer for the Indian market."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=20,
+            temperature=0.1 # Lowered for even stricter consistency
         )
-        return response.choices[0].message.content.strip()
-    except:
+        
+        result = response.choices[0].message.content.strip()
+        # Clean the result in case the AI adds a period at the end
+        return result.replace('.', '') 
+    
+    except Exception as e:
+        # Log the error to the console/terminal so we can debug why it failed
+        print(f"AI Error for {description}: {e}")
         return "Others"
 
 def clean_currency(value):
@@ -68,6 +88,7 @@ else:
             if uploaded_file.name.endswith('.pdf'):
                 with pdfplumber.open(uploaded_file) as pdf:
                     all_data = [row for page in pdf.pages for row in (page.extract_table() or [])]
+                    # PDF extraction often results in messy headers; we strip whitespace
                     df = pd.DataFrame(all_data[1:], columns=all_data[0])
             else:
                 df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('xlsx') else pd.read_csv(uploaded_file)
@@ -83,34 +104,39 @@ else:
             final_rows = []
 
             for index, row in df.iterrows():
-                desc = str(row[desc_col])[:50] if desc_col else "Unknown"
+                # Grab a bit more of the description to help the AI
+                desc = str(row[desc_col]) if desc_col else "Unknown"
                 dr = clean_currency(row[debit_col]) if debit_col else 0.0
                 cr = clean_currency(row[credit_col]) if credit_col else 0.0
                 
-                # Determine if it's an Expense or Income
                 if dr > 0:
                     amt, trans_type, color = dr, "DEBIT", "red"
                 elif cr > 0:
                     amt, trans_type, color = cr, "CREDIT", "green"
                 else: continue
 
-                # AI Logic
+                # AI Logic with Session State caching to save money/time
                 state_key = f"cat_v3_{index}"
                 if state_key not in st.session_state:
-                    with st.spinner('AI...'):
+                    with st.spinner('Categorizing...'):
                         st.session_state[state_key] = get_ai_category(desc)
 
                 with st.container():
                     c1, c2, c3, c4 = st.columns([2.5, 0.8, 1, 1.5])
-                    c1.write(f"**{desc}**")
+                    c1.write(f"**{desc[:60]}**") # Show enough to be useful
                     c2.markdown(f":{color}[{trans_type}]")
                     c3.write(f"₹{amt:,.2f}")
                     
                     ai_pick = st.session_state[state_key]
-                    idx = st.session_state.categories.index(ai_pick) if ai_pick in st.session_state.categories else 0
+                    
+                    # Safety check: if AI returns something not in our list, default to Others
+                    if ai_pick not in st.session_state.categories:
+                        idx = st.session_state.categories.index("Others")
+                    else:
+                        idx = st.session_state.categories.index(ai_pick)
+                        
                     selected_cat = c4.selectbox("Cat", st.session_state.categories, index=idx, key=f"s_{index}", label_visibility="collapsed")
                     
-                    # Log data for math (Subtract Debits, Add Credits)
                     final_rows.append({"Amount": amt, "Category": selected_cat, "Type": trans_type})
 
             # --- 4. ANALYTICS ---
@@ -127,7 +153,9 @@ else:
                 m3.metric("Total Credits", f"₹{total_cr:,.2f}")
                 m4.metric("Closing", f"₹{closing_bal:,.2f}")
 
-                fig = px.bar(res_df, x='Category', y='Amount', color='Type', barmode='group', title="Spend vs Income by Category")
+                fig = px.bar(res_df, x='Category', y='Amount', color='Type', 
+                             color_discrete_map={"DEBIT": "salmon", "CREDIT": "lightgreen"},
+                             barmode='group', title="Spend vs Income by Category")
                 st.plotly_chart(fig, use_container_width=True)
 
         except Exception as e:

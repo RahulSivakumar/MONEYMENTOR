@@ -4,6 +4,34 @@ import pdfplumber
 import plotly.express as px
 from openai import OpenAI
 
+# --- DIAGNOSTIC BLOCK ---
+import os
+
+with st.sidebar:
+    st.write("### 🔍 Debugging Secrets")
+    
+    # Check if folder exists
+    if os.path.exists(".streamlit"):
+        st.write("✅ .streamlit folder found")
+    else:
+        st.error("❌ .streamlit folder NOT found")
+
+    # Check if file exists
+    if os.path.exists(".streamlit/secrets.toml"):
+        st.write("✅ secrets.toml file found")
+    else:
+        st.error("❌ secrets.toml file NOT found")
+
+    # Check if key is loaded
+    if "OPENAI_API_KEY" in st.secrets:
+        st.success("🚀 API Key Loaded Successfully!")
+        api_key = st.secrets["OPENAI_API_KEY"]
+    else:
+        st.error("❌ Key 'OPENAI_API_KEY' not found inside secrets.toml")
+        api_key = None
+# --- END DIAGNOSTIC ---
+
+
 # --- 1. CONFIG & SECURE AI CONNECTION ---
 st.set_page_config(page_title="Project MONEYMENTOR", layout="wide", page_icon="💰")
 

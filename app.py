@@ -1,5 +1,4 @@
 import streamlit as st
-import pdftools
 import pandas as pd
 import pdfplumber
 import plotly.express as px
@@ -7,7 +6,7 @@ import plotly.express as px
 # --- 1. SETTINGS & SESSION STATE ---
 st.set_page_config(page_title="Project MONEYMENTOR", layout="wide", page_icon="💰")
 
-# Maintain state across reruns
+# Maintain state across reruns so data doesn't disappear
 if 'custom_cats' not in st.session_state:
     st.session_state.custom_cats = []
 if 'raw_df' not in st.session_state:
@@ -17,7 +16,7 @@ if 'raw_df' not in st.session_state:
 with st.sidebar:
     st.title("🛡️ MoneyMentor Control")
     
-    # Section: Opening Balance (MANDATORY)
+    # Section: Opening Balance (MANDATORY GATE)
     st.header("📊 Step 1: Financial Baseline")
     opening_bal = st.number_input(
         "Enter Opening Balance (₹)", 
@@ -59,20 +58,19 @@ st.title("💰 Project MONEYMENTOR")
 # --- THE COMPULSORY GATE ---
 if opening_bal <= 0:
     st.warning("### 🛑 Action Required: Enter Opening Balance")
-    st.info("To ensure your net-flow and portfolio tracking are accurate, please enter your current account balance in the **Sidebar** on the left.")
-    st.stop() # Prevents the rest of the code from running
+    st.info("Please enter your current account balance in the **Sidebar** to unlock the application.")
+    st.stop() 
 
 if not st.session_state.custom_cats:
     st.warning("### 🛑 Action Required: Add Categories")
-    st.info("You need at least one category (e.g., 'Investments', 'CAT Prep', 'Rent') to label your transactions.")
+    st.info("Add at least one category in the **Sidebar** to label your transactions.")
     st.stop()
 
-# --- IF GATE PASSED: FILE UPLOADER ---
-uploaded_file = st.file_uploader("📂 Upload Bank Statement (PDF, CSV, XLSX)", type=['pdf', 'xlsx', 'csv'])
+# --- FILE UPLOADER (Only visible if Gate is passed) ---
+uploaded_file = st.file_uploader("📂 Upload Bank Statement", type=['pdf', 'xlsx', 'csv'])
 
 if uploaded_file is not None:
     try:
-        # Process and store in session state so it persists during sidebar changes
         if uploaded_file.name.endswith('.pdf'):
             with pdfplumber.open(uploaded_file) as pdf:
                 all_data = []
@@ -85,7 +83,6 @@ if uploaded_file is not None:
             st.session_state.raw_df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('xlsx') else pd.read_csv(uploaded_file)
         
         st.session_state.raw_df.columns = [str(c).strip() for c in st.session_state.raw_df.columns]
-        st.success("Statement Loaded Successfully!")
     except Exception as e:
         st.error(f"Error reading file: {e}")
 
@@ -93,6 +90,7 @@ if uploaded_file is not None:
 if st.session_state.raw_df is not None:
     df = st.session_state.raw_df
     
+    # Detect Columns
     desc_col = next((c for c in df.columns if any(k in c.lower() for k in ["desc", "narration", "details"])), None)
     debit_col = next((c for c in df.columns if any(k in c.lower() for k in ["debit", "withdrawal", "out"])), None)
     credit_col = next((c for c in df.columns if any(k in c.lower() for k in ["credit", "deposit", "in"])), None)
@@ -115,7 +113,6 @@ if st.session_state.raw_df is not None:
             c2.markdown(f":{color}[{t_type}]")
             c3.write(f"₹{amt:,.2f}")
             
-            # Category selection persists even when you add more categories in the sidebar
             sel_cat = c4.selectbox(
                 "Label", 
                 st.session_state.custom_cats, 
@@ -138,10 +135,9 @@ if st.session_state.raw_df is not None:
         m3.metric("Total Income", f"₹{total_cr:,.2f}")
         m4.metric("Net Closing", f"₹{closing_bal:,.2f}")
 
-        # Visualization
         fig = px.bar(res_df.groupby('Category')['Amount'].sum().reset_index(), 
                      x='Category', y='Amount', color='Category',
                      title="Expense Distribution by Label")
         st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("Standing by. Please follow the steps in the sidebar to unlock the uploader.")
+    st.info("Setup complete. Please upload your bank statement above.")

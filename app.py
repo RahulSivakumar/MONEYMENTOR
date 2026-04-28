@@ -3,51 +3,66 @@ import pandas as pd
 import pdfplumber
 import plotly.express as px
 
-# --- 1. CONFIG ---
-st.set_page_config(page_title="Project MONEYMENTOR (Local)", layout="wide", page_icon="💰")
+# --- 1. SETTINGS & SESSION STATE ---
+st.set_page_config(page_title="Project MONEYMENTOR", layout="wide", page_icon="💰")
 
+# Initialize custom categories list if it doesn't exist
+if 'custom_cats' not in st.session_state:
+    st.session_state.custom_cats = []
+
+# --- 2. SIDEBAR: CATEGORY & BALANCE CONTROL ---
 with st.sidebar:
     st.title("🛡️ MoneyMentor Control")
+    
+    # Section: Category Manager
+    st.header("🏷️ Category Manager")
+    st.write("Build your own classification system below:")
+    
+    # Input to add new categories
+    with st.form("cat_form", clear_on_submit=True):
+        new_cat = st.text_input("New Category Name:")
+        add_pressed = st.form_submit_button("➕ Add Category")
+        if add_pressed and new_cat:
+            if new_cat not in st.session_state.custom_cats:
+                st.session_state.custom_cats.append(new_cat)
+                st.rerun()
+
+    # Display and Delete existing categories
+    if st.session_state.custom_cats:
+        st.write("---")
+        st.subheader("Existing Categories")
+        for i, cat in enumerate(st.session_state.custom_cats):
+            cols = st.columns([0.8, 0.2])
+            cols[0].info(cat)
+            if cols[1].button("🗑️", key=f"del_{i}"):
+                st.session_state.custom_cats.remove(cat)
+                st.rerun()
+    else:
+        st.warning("No categories added yet.")
+
+    st.divider()
+    
+    # Section: Financial Baseline
     st.header("📊 Initial Balance")
     opening_bal = st.number_input("Enter Opening Balance (₹)", value=0.0, step=100.0)
-    
-    st.divider()
-    st.info("💡 **Local Mode:** Transactions are categorized using built-in logic rules.")
 
-# --- 2. RULE-BASED CATEGORIZATION ENGINE ---
-def get_local_category(description):
-    desc = description.upper()
-    
-    # Define your rule mapping (Keywords -> Category)
-    rules = {
-        "Investments": ["NIFTYBEES", "ITBEES", "ZERODHA", "KOTAKMF", "NIPPON", "SIP", "MUTUAL FUND"],
-        "Food & Dining": ["ZOMATO", "SWIGGY", "RESTAURANT", "CAFE", "DOMINOS", "STARBUCKS"],
-        "Shopping": ["AMAZON", "FLIPKART", "MYNTRA", "MALL", "RETAIL"],
-        "Bills": ["BESCOM", "AIRTEL", "JIO", "RECHARGE", "ELECTRICITY", "INSURANCE"],
-        "Transport": ["UBER", "OLA", "METRO", "PETROL", "SHELL", "HPCL"],
-        "Salary": ["SALARY", "NEFT-IN", "IMPS-IN"],
-        "UPI Transfer": ["UPI-", "@OK", "@YBL", "PAYTM"]
-    }
-    
-    for category, keywords in rules.items():
-        if any(key in desc for key in keywords):
-            return category
-            
-    return "Others"
-
+# --- 3. HELPER FUNCTIONS ---
 def clean_currency(value):
     if pd.isna(value) or str(value).strip() == "": return 0.0
     val_str = str(value).replace('₹', '').replace(',', '').replace(' ', '').strip()
     try: return float(val_str)
     except: return 0.0
 
-# --- 3. MAIN UI ---
+# --- 4. MAIN INTERFACE ---
 st.title("💰 Project MONEYMENTOR")
 
-if opening_bal <= 0:
-    st.warning("👈 **Action Required:** Enter your **Opening Balance** in the sidebar to begin.")
+# Validation Gate
+if not st.session_state.custom_cats:
+    st.info("👈 **Step 1:** Add at least one category in the sidebar (e.g., 'Investments', 'Food', 'CAT Prep').")
+elif opening_bal <= 0:
+    st.info("👈 **Step 2:** Set your **Opening Balance** in the sidebar to begin analysis.")
 else:
-    uploaded_file = st.file_uploader("Upload Statement (PDF, CSV, XLSX)", type=['pdf', 'xlsx', 'csv'])
+    uploaded_file = st.file_uploader("Upload Statement", type=['pdf', 'xlsx', 'csv'])
 
     if uploaded_file:
         try:
@@ -58,52 +73,52 @@ else:
                     for page in pdf.pages:
                         table = page.extract_table()
                         if table:
-                            # Filter empty rows
-                            all_data.extend([r for r in table if any(c for c in r)])
+                            # Filter out rows where all cells are empty
+                            all_data.extend([r for r in table if any(c and str(c).strip() for c in r)])
                     df = pd.DataFrame(all_data[1:], columns=all_data[0])
             else:
                 df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('xlsx') else pd.read_csv(uploaded_file)
 
+            # Cleanup Headers
             df.columns = [str(c).strip() for c in df.columns]
             
-            # Identify columns
+            # Smart Column Detection
             desc_col = next((c for c in df.columns if any(k in c.lower() for k in ["desc", "narration", "details"])), None)
             debit_col = next((c for c in df.columns if any(k in c.lower() for k in ["debit", "withdrawal", "out"])), None)
             credit_col = next((c for c in df.columns if any(k in c.lower() for k in ["credit", "deposit", "in"])), None)
 
-            st.subheader("📋 Categorized Transactions")
+            st.subheader("📋 Transaction Categorization")
             final_rows = []
 
-            # Categories for the dropdown
-            categories = ["Food & Dining", "Shopping", "Transport", "Investments", "Bills", "Salary", "Rent", "UPI Transfer", "Entertainment", "Others"]
-
+            # Transaction Loop
             for index, row in df.iterrows():
                 desc = str(row[desc_col]) if desc_col else "Unknown"
                 dr = clean_currency(row[debit_col]) if debit_col else 0.0
                 cr = clean_currency(row[credit_col]) if credit_col else 0.0
                 
                 if dr > 0:
-                    amt, trans_type, color = dr, "DEBIT", "red"
+                    amt, t_type, color = dr, "DEBIT", "red"
                 elif cr > 0:
-                    amt, trans_type, color = cr, "CREDIT", "green"
-                else: continue
+                    amt, t_type, color = cr, "CREDIT", "green"
+                else: 
+                    continue # Skip non-monetary rows
 
-                # Get category from our Local Rule Engine
-                suggested_cat = get_local_category(desc)
-                
                 with st.container():
                     c1, c2, c3, c4 = st.columns([2.5, 0.8, 1, 1.5])
                     c1.write(f"**{desc[:60]}**")
-                    c2.markdown(f":{color}[{trans_type}]")
+                    c2.markdown(f":{color}[{t_type}]")
                     c3.write(f"₹{amt:,.2f}")
                     
-                    # You can still manually change it if the rule gets it wrong
-                    idx = categories.index(suggested_cat)
-                    selected_cat = c4.selectbox("Cat", categories, index=idx, key=f"s_{index}", label_visibility="collapsed")
-                    
-                    final_rows.append({"Amount": amt, "Category": selected_cat, "Type": trans_type})
+                    # Selection from User's Custom Categories
+                    sel_cat = c4.selectbox(
+                        "Category", 
+                        st.session_state.custom_cats, 
+                        key=f"row_{index}",
+                        label_visibility="collapsed"
+                    )
+                    final_rows.append({"Amount": amt, "Category": sel_cat, "Type": t_type})
 
-            # --- 4. ANALYTICS ---
+            # --- 5. ANALYTICS ---
             if final_rows:
                 res_df = pd.DataFrame(final_rows)
                 total_dr = res_df[res_df['Type'] == "DEBIT"]['Amount'].sum()
@@ -113,14 +128,17 @@ else:
                 st.divider()
                 m1, m2, m3, m4 = st.columns(4)
                 m1.metric("Opening", f"₹{opening_bal:,.2f}")
-                m2.metric("Total Debits", f"₹{total_dr:,.2f}", delta_color="inverse")
-                m3.metric("Total Credits", f"₹{total_cr:,.2f}")
-                m4.metric("Closing", f"₹{closing_bal:,.2f}")
+                m2.metric("Total Spends", f"₹{total_dr:,.2f}", delta_color="inverse")
+                m3.metric("Total Income", f"₹{total_cr:,.2f}")
+                m4.metric("Closing Balance", f"₹{closing_bal:,.2f}")
 
-                fig = px.bar(res_df, x='Category', y='Amount', color='Type', 
-                             color_discrete_map={"DEBIT": "salmon", "CREDIT": "lightgreen"},
-                             barmode='group', title="Spend vs Income by Category")
-                st.plotly_chart(fig, use_container_width=True)
+                # Visualizing Spends
+                if not res_df.empty:
+                    fig = px.pie(res_df, values='Amount', names='Category', hole=0.4,
+                                 title="Expense Distribution",
+                                 color_discrete_sequence=px.colors.sequential.RdBu)
+                    st.plotly_chart(fig, use_container_width=True)
 
         except Exception as e:
-            st.error(f"Error processing file: {e}")
+            st.error(f"⚠️ Formatting Error: {e}")
+            st.info("Try checking if your file has standard headers like 'Narration', 'Debit', and 'Credit'.")

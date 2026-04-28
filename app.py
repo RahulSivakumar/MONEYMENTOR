@@ -5,30 +5,14 @@ import plotly.express as px
 from openai import OpenAI
 
 # --- DIAGNOSTIC BLOCK ---
-import os
-
 with st.sidebar:
-    st.write("### 🔍 Debugging Secrets")
-    
-    # Check if folder exists
-    if os.path.exists(".streamlit"):
-        st.write("✅ .streamlit folder found")
+    st.write("### 🔍 Secret Keys Found:")
+    if st.secrets:
+        # This lists all keys it found (without showing the actual secret value)
+        for key in st.secrets.keys():
+            st.write(f"- `{key}`")
     else:
-        st.error("❌ .streamlit folder NOT found")
-
-    # Check if file exists
-    if os.path.exists(".streamlit/secrets.toml"):
-        st.write("✅ secrets.toml file found")
-    else:
-        st.error("❌ secrets.toml file NOT found")
-
-    # Check if key is loaded
-    if "OPENAI_API_KEY" in st.secrets:
-        st.success("🚀 API Key Loaded Successfully!")
-        api_key = st.secrets["OPENAI_API_KEY"]
-    else:
-        st.error("❌ Key 'OPENAI_API_KEY' not found inside secrets.toml")
-        api_key = None
+        st.error("No secrets detected at all.")
 # --- END DIAGNOSTIC ---
 
 

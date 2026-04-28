@@ -1,4 +1,5 @@
 import streamlit as st
+import pdftools
 import pandas as pd
 import pdfplumber
 import plotly.express as px
@@ -6,21 +7,33 @@ import plotly.express as px
 # --- 1. SETTINGS & SESSION STATE ---
 st.set_page_config(page_title="Project MONEYMENTOR", layout="wide", page_icon="💰")
 
-# Persistent storage for categories and the dataframe
+# Maintain state across reruns
 if 'custom_cats' not in st.session_state:
     st.session_state.custom_cats = []
 if 'raw_df' not in st.session_state:
     st.session_state.raw_df = None
 
-# --- 2. SIDEBAR: CATEGORY & BALANCE CONTROL ---
+# --- 2. SIDEBAR: MANDATORY CONFIGURATION ---
 with st.sidebar:
     st.title("🛡️ MoneyMentor Control")
     
-    st.header("🏷️ Category Manager")
+    # Section: Opening Balance (MANDATORY)
+    st.header("📊 Step 1: Financial Baseline")
+    opening_bal = st.number_input(
+        "Enter Opening Balance (₹)", 
+        value=0.0, 
+        step=500.0, 
+        help="This is required to calculate your final net flow and closing balance."
+    )
+    
+    st.divider()
+
+    # Section: Category Manager
+    st.header("🏷️ Step 2: Categories")
     with st.form("cat_form", clear_on_submit=True):
-        new_cat = st.text_input("New Category Name:")
-        if st.form_submit_button("➕ Add Category") and new_cat:
-            if new_cat not in st.session_state.custom_cats:
+        new_cat = st.text_input("Add Category:")
+        if st.form_submit_button("➕ Add"):
+            if new_cat and new_cat not in st.session_state.custom_cats:
                 st.session_state.custom_cats.append(new_cat)
                 st.rerun()
 
@@ -33,9 +46,6 @@ with st.sidebar:
                 st.session_state.custom_cats.remove(cat)
                 st.rerun()
 
-    st.divider()
-    opening_bal = st.number_input("Enter Opening Balance (₹)", value=0.0, step=100.0)
-
 # --- 3. HELPER FUNCTIONS ---
 def clean_currency(value):
     if pd.isna(value) or str(value).strip() == "": return 0.0
@@ -43,14 +53,26 @@ def clean_currency(value):
     try: return float(val_str)
     except: return 0.0
 
-# --- 4. DATA PROCESSING LOGIC ---
+# --- 4. MAIN INTERFACE LOGIC ---
 st.title("💰 Project MONEYMENTOR")
 
-uploaded_file = st.file_uploader("Upload Statement", type=['pdf', 'xlsx', 'csv'])
+# --- THE COMPULSORY GATE ---
+if opening_bal <= 0:
+    st.warning("### 🛑 Action Required: Enter Opening Balance")
+    st.info("To ensure your net-flow and portfolio tracking are accurate, please enter your current account balance in the **Sidebar** on the left.")
+    st.stop() # Prevents the rest of the code from running
 
-# If a new file is uploaded, process it and save to session state
+if not st.session_state.custom_cats:
+    st.warning("### 🛑 Action Required: Add Categories")
+    st.info("You need at least one category (e.g., 'Investments', 'CAT Prep', 'Rent') to label your transactions.")
+    st.stop()
+
+# --- IF GATE PASSED: FILE UPLOADER ---
+uploaded_file = st.file_uploader("📂 Upload Bank Statement (PDF, CSV, XLSX)", type=['pdf', 'xlsx', 'csv'])
+
 if uploaded_file is not None:
     try:
+        # Process and store in session state so it persists during sidebar changes
         if uploaded_file.name.endswith('.pdf'):
             with pdfplumber.open(uploaded_file) as pdf:
                 all_data = []
@@ -62,59 +84,64 @@ if uploaded_file is not None:
         else:
             st.session_state.raw_df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('xlsx') else pd.read_csv(uploaded_file)
         
-        # Cleanup Headers once
         st.session_state.raw_df.columns = [str(c).strip() for c in st.session_state.raw_df.columns]
+        st.success("Statement Loaded Successfully!")
     except Exception as e:
-        st.error(f"Upload Error: {e}")
+        st.error(f"Error reading file: {e}")
 
-# --- 5. MAIN UI (DISPLAY DATA FROM SESSION STATE) ---
+# --- 5. DATA DISPLAY & LABELING ---
 if st.session_state.raw_df is not None:
     df = st.session_state.raw_df
     
-    # Detect Columns
     desc_col = next((c for c in df.columns if any(k in c.lower() for k in ["desc", "narration", "details"])), None)
     debit_col = next((c for c in df.columns if any(k in c.lower() for k in ["debit", "withdrawal", "out"])), None)
     credit_col = next((c for c in df.columns if any(k in c.lower() for k in ["credit", "deposit", "in"])), None)
 
-    if not st.session_state.custom_cats:
-        st.warning("👈 Please add at least one category in the sidebar to start labeling.")
-    else:
-        st.subheader("📋 Label Transactions")
-        final_rows = []
+    st.subheader("📋 Label Your Transactions")
+    final_rows = []
 
-        for index, row in df.iterrows():
-            desc = str(row[desc_col]) if desc_col else "Unknown"
-            dr = clean_currency(row[debit_col]) if debit_col else 0.0
-            cr = clean_currency(row[credit_col]) if credit_col else 0.0
+    for index, row in df.iterrows():
+        desc = str(row[desc_col]) if desc_col else "Unknown"
+        dr = clean_currency(row[debit_col]) if debit_col else 0.0
+        cr = clean_currency(row[credit_col]) if credit_col else 0.0
+        
+        if dr == 0 and cr == 0: continue
+        
+        amt, t_type, color = (dr, "DEBIT", "red") if dr > 0 else (cr, "CREDIT", "green")
+
+        with st.container():
+            c1, c2, c3, c4 = st.columns([2.5, 0.8, 1, 1.5])
+            c1.write(f"**{desc[:60]}**")
+            c2.markdown(f":{color}[{t_type}]")
+            c3.write(f"₹{amt:,.2f}")
             
-            if dr == 0 and cr == 0: continue
-            
-            amt, t_type, color = (dr, "DEBIT", "red") if dr > 0 else (cr, "CREDIT", "green")
+            # Category selection persists even when you add more categories in the sidebar
+            sel_cat = c4.selectbox(
+                "Label", 
+                st.session_state.custom_cats, 
+                key=f"row_{index}", 
+                label_visibility="collapsed"
+            )
+            final_rows.append({"Amount": amt, "Category": sel_cat, "Type": t_type})
 
-            with st.container():
-                c1, c2, c3, c4 = st.columns([2.5, 0.8, 1, 1.5])
-                c1.write(f"**{desc[:60]}**")
-                c2.markdown(f":{color}[{t_type}]")
-                c3.write(f"₹{amt:,.2f}")
-                
-                # Selection remains stable during reruns
-                sel_cat = c4.selectbox("Cat", st.session_state.custom_cats, key=f"row_{index}", label_visibility="collapsed")
-                final_rows.append({"Amount": amt, "Category": sel_cat, "Type": t_type})
+    # --- 6. ANALYTICS ---
+    if final_rows:
+        res_df = pd.DataFrame(final_rows)
+        total_dr = res_df[res_df['Type'] == "DEBIT"]['Amount'].sum()
+        total_cr = res_df[res_df['Type'] == "CREDIT"]['Amount'].sum()
+        closing_bal = opening_bal - total_dr + total_cr
+        
+        st.divider()
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Opening", f"₹{opening_bal:,.2f}")
+        m2.metric("Total Spent", f"₹{total_dr:,.2f}", delta_color="inverse")
+        m3.metric("Total Income", f"₹{total_cr:,.2f}")
+        m4.metric("Net Closing", f"₹{closing_bal:,.2f}")
 
-        # --- ANALYTICS ---
-        if final_rows:
-            res_df = pd.DataFrame(final_rows)
-            total_dr = res_df[res_df['Type'] == "DEBIT"]['Amount'].sum()
-            total_cr = res_df[res_df['Type'] == "CREDIT"]['Amount'].sum()
-            
-            st.divider()
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Opening", f"₹{opening_bal:,.2f}")
-            m2.metric("Total Spent", f"₹{total_dr:,.2f}", delta_color="inverse")
-            m3.metric("Total Income", f"₹{total_cr:,.2f}")
-            m4.metric("Closing Balance", f"₹{opening_bal - total_dr + total_cr:,.2f}")
-
-            fig = px.pie(res_df, values='Amount', names='Category', hole=0.4, title="Spend Breakdown")
-            st.plotly_chart(fig, use_container_width=True)
+        # Visualization
+        fig = px.bar(res_df.groupby('Category')['Amount'].sum().reset_index(), 
+                     x='Category', y='Amount', color='Category',
+                     title="Expense Distribution by Label")
+        st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("👋 Welcome! Please upload your bank statement to get started.")
+    st.info("Standing by. Please follow the steps in the sidebar to unlock the uploader.")

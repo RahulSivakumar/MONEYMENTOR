@@ -15,16 +15,12 @@ if "GEMINI_API_KEY" not in st.secrets:
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 model = genai.GenerativeModel('gemini-2.5-flash')
 
-# --- DATA CLEANING HELPER ---
+# --- DATA CLEANING ---
 def clean_numeric(val):
-    """Aggressive cleaning for currency strings."""
     if pd.isna(val) or val == "": return 0.0
-    # Keep only digits and the first decimal point found
     cleaned = re.sub(r'[^\d.]', '', str(val))
-    try:
-        return float(cleaned)
-    except:
-        return 0.0
+    try: return float(cleaned)
+    except: return 0.0
 
 def process_pdf(pdf_file):
     all_data = []
@@ -32,51 +28,27 @@ def process_pdf(pdf_file):
         for page in pdf.pages:
             table = page.extract_table()
             if table: all_data.extend(table) 
-    if not all_data: return pd.DataFrame()
-    return pd.DataFrame(all_data[1:], columns=all_data[0])
+    return pd.DataFrame(all_data[1:], columns=all_data[0]) if all_data else pd.DataFrame()
 
-# --- THE PREVIOUS ACCURATE CATEGORIZATION ENGINE ---
-def ai_categorize_previous(df, desc_col):
+# --- HYBRID AI ENGINE ---
+def ai_categorize(df, desc_col):
     descriptions = df[desc_col].astype(str).tolist()
-    total_rows = len(df)
-    
-    # Priority Keyword Map (The 'Old Reliable' logic)
     keyword_map = {
-        "ZOMATO": "Food", "SWIGGY": "Food", "RESTAURANT": "Food",
-        "NIFTY BEES": "Investment", "IT BEES": "Investment", "ZERODHA": "Investment", 
-        "MUTUAL FUND": "Investment", "NIPPON": "Investment",
-        "AMAZON": "Shopping", "FLIPKART": "Shopping",
-        "CRICKET": "Sports/Hobbies", "DECATHLON": "Sports/Hobbies",
-        "RENT": "Rent", "SALARY": "Salary"
+        "ZOMATO": "Food", "SWIGGY": "Food", "ZERODHA": "Investment", 
+        "NIFTY BEES": "Investment", "IT BEES": "Investment", "CRICKET": "Sports/Hobbies",
+        "AMAZON": "Shopping", "RENT": "Rent", "SALARY": "Salary"
     }
-
-    # Simplified Prompt for better instruction following
-    prompt = f"""
-    Categorize these transactions into: [Food, Investment, Shopping, Rent, Salary, Sports/Hobbies, Bills, Misc].
-    Return ONLY a JSON object with key 'categories' containing a list of {total_rows} strings.
-    Transactions: {descriptions}
-    """
-    
+    prompt = f"Categorize these into [Food, Investment, Shopping, Rent, Salary, Sports/Hobbies, Bills, Misc]. Return ONLY JSON with key 'categories'. Transactions: {descriptions[:50]}"
     try:
         response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
-        ai_suggestions = json.loads(response.text).get("categories", [])
-        
-        final_categories = []
-        for i, desc in enumerate(descriptions):
-            desc_upper = desc.upper()
-            # Check keywords first
-            matched = next((cat for key, cat in keyword_map.items() if key in desc_upper), None)
-            if matched:
-                final_categories.append(matched)
-            else:
-                final_categories.append(ai_suggestions[i] if i < len(ai_suggestions) else "Misc")
-        return final_categories
-    except:
-        return ["Misc"] * total_rows
+        suggestions = json.loads(response.text).get("categories", [])
+        return [next((cat for k, cat in keyword_map.items() if k in d.upper()), suggestions[i] if i < len(suggestions) else "Misc") for i, d in enumerate(descriptions)]
+    except: return ["Misc"] * len(df)
 
-# --- MAIN UI ---
-st.title("🏦 MoneyMentor: AI Financial Agent")
+# --- APP UI ---
+st.title("🏦 MoneyMentor: Insightful Review")
 
+# Sidebar
 st.sidebar.header("💰 Account Setup")
 opening_balance = st.sidebar.number_input("Opening Balance (₹)", value=0.0)
 
@@ -89,55 +61,71 @@ if uploaded_file:
         elif file_ext == "xlsx": st.session_state.raw_df = pd.read_excel(uploaded_file)
         else: st.session_state.raw_df = pd.read_csv(uploaded_file)
         st.session_state.raw_df["Category"] = "Uncategorized"
+        st.session_state.raw_df["Reviewed"] = False # Track review status
 
-    df = st.session_state.raw_df.copy()
+    df = st.session_state.raw_df
     cols = df.columns.tolist()
 
-    st.info("Map your columns to identify spending:")
+    # Column Mapping
     c1, c2, c3 = st.columns(3)
     with c1: desc_col = st.selectbox("Description", options=cols)
     with c2: debit_col = st.selectbox("Debit (-)", options=cols)
     with c3: credit_col = st.selectbox("Credit (+)", options=cols)
 
-    if st.button("🪄 Run Categorization"):
-        with st.spinner("AI analyzing..."):
-            st.session_state.raw_df["Category"] = ai_categorize_previous(df, desc_col)
-            st.rerun()
+    if st.button("🪄 Run Smart Categorization"):
+        st.session_state.raw_df["Category"] = ai_categorize(df, desc_col)
+        st.rerun()
 
-    # CRITICAL: Prepare data for calculations and charts
+    # Data Prep
     df["Debit_Num"] = df[debit_col].apply(clean_numeric)
     df["Credit_Num"] = df[credit_col].apply(clean_numeric)
     df["Running Balance"] = opening_balance + (df["Credit_Num"] - df["Debit_Num"]).cumsum()
 
-    st.subheader("📝 Review & Edit")
-    # Store the result of the editor
-    edited_df = st.data_editor(
-        df,
-        column_config={
-            "Category": st.column_config.SelectboxColumn("Category", options=["Food", "Investment", "Shopping", "Rent", "Salary", "Sports/Hobbies", "Bills", "Misc"]),
-            "Debit_Num": st.column_config.NumberColumn("Debit", format="₹%.2f"),
-            "Credit_Num": st.column_config.NumberColumn("Credit", format="₹%.2f"),
-            "Running Balance": st.column_config.NumberColumn("Balance", format="₹%.2f"),
-        },
-        disabled=[c for c in df.columns if c != "Category"],
-        use_container_width=True, hide_index=True
-    )
+    # --- STEP-BY-STEP REVIEW INTERFACE ---
+    st.subheader("📝 Review Queue")
+    
+    # Split data into pending and finalized
+    pending_df = df[df["Category"] == "Uncategorized"]
+    ready_df = df[df["Category"] != "Uncategorized"]
 
-    # DASHBOARD
+    tab1, tab2 = st.tabs([f"Pending Review ({len(pending_df)})", f"Finalized ({len(ready_df)})"])
+
+    with tab1:
+        if len(pending_df) > 0:
+            st.info("The items below need your attention.")
+            edited_pending = st.data_editor(
+                pending_df,
+                column_config={"Category": st.column_config.SelectboxColumn("Category", options=["Food", "Investment", "Shopping", "Rent", "Salary", "Sports/Hobbies", "Bills", "Misc"])},
+                disabled=list(set(df.columns) - {"Category"}),
+                use_container_width=True, hide_index=True, key="pending_editor"
+            )
+        else:
+            st.success("All items categorized! Check the Finalized tab.")
+
+    with tab2:
+        st.data_editor(
+            ready_df,
+            column_config={"Category": st.column_config.SelectboxColumn("Category", options=["Food", "Investment", "Shopping", "Rent", "Salary", "Sports/Hobbies", "Bills", "Misc"])},
+            disabled=list(set(df.columns) - {"Category"}),
+            use_container_width=True, hide_index=True, key="final_editor"
+        )
+
+    # --- INSIGHTFUL DASHBOARD ---
     st.divider()
+    st.subheader("📊 Financial Insights")
+    
     dash1, dash2 = st.columns(2)
     
     with dash1:
-        st.subheader("Spending by Category")
-        # Ensure we are using the cleaned numeric column for the chart
-        spend_summary = edited_df[edited_df["Debit_Num"] > 0].groupby("Category")["Debit_Num"].sum()
-        if not spend_summary.empty:
-            st.bar_chart(spend_summary)
-        else:
-            st.info("No spending detected to chart.")
+        st.write("**Spending Distribution**")
+        spend_summary = df[df["Debit_Num"] > 0].groupby("Category")["Debit_Num"].sum()
+        st.bar_chart(spend_summary)
 
     with dash2:
-        st.subheader("Balance Trend")
-        st.line_chart(edited_df["Running Balance"])
+        st.write("**Cash Flow Momentum**")
+        # Insight: Compare daily spending against the running balance
+        df["Net Flow"] = df["Credit_Num"] - df["Debit_Num"]
+        st.area_chart(df[["Net Flow", "Running Balance"]])
+        st.caption("Grey Area: Net daily flow | Blue Line: Overall Balance")
 
-    st.metric("Final Balance", f"₹{edited_df['Running Balance'].iloc[-1]:,.2f}")
+    st.metric("Closing Balance", f"₹{df['Running Balance'].iloc[-1]:,.2f}")

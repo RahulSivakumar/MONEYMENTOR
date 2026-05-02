@@ -6,3 +6,4 @@ plotly
 openai
 langchain-openai
 python-dotenv
+google-generativeai

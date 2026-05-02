@@ -3,114 +3,166 @@ import pandas as pd
 import pdfplumber
 import json
 import google.generativeai as genai
+import re
 
 # --- INITIAL SETUP ---
-st.set_page_config(page_title="MoneyMentor Pro", layout="wide")
+st.set_page_config(page_title="MoneyMentor Pro", layout="wide", page_icon="🏦")
 
 if "GEMINI_API_KEY" not in st.secrets:
-    st.error("Please set your GEMINI_API_KEY in .streamlit/secrets.toml")
+    st.error("Missing GEMINI_API_KEY in .streamlit/secrets.toml")
     st.stop()
 
+# Configure Gemini 2.5 Flash
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 model = genai.GenerativeModel('gemini-2.5-flash')
 
-# --- DATA CLEANING HELPER ---
-def clean_money(col):
-    """Force converts strings with symbols/commas into float numbers."""
-    return pd.to_numeric(
-        col.astype(str)
-        .str.replace(r'[^\d.]', '', regex=True), # Removes everything except digits and dots
-        errors='coerce'
-    ).fillna(0.0)
+# --- DATA CLEANING HELPERS ---
 
-# --- APP LOGIC ---
+def clean_money_column(col):
+    """Force-cleans currency strings into floats (handles ₹, commas, and spaces)."""
+    # Remove everything except digits and decimal points
+    cleaned = col.astype(str).str.replace(r'[^\d.]', '', regex=True)
+    return pd.to_numeric(cleaned, errors='coerce').fillna(0.0)
+
+def process_pdf(pdf_file):
+    """Extracts tabular data from PDF statements."""
+    all_data = []
+    with pdfplumber.open(pdf_file) as pdf:
+        for page in pdf.pages:
+            table = page.extract_table()
+            if table:
+                all_data.extend(table) 
+    if not all_data:
+        return pd.DataFrame()
+    # Use first row as header and drop it from data
+    return pd.DataFrame(all_data[1:], columns=all_data[0])
+
+# --- THE AI AGENT ---
+
+def ai_categorize_hybrid(df, desc_col):
+    """Hybrid Engine: Uses keyword mapping first, then AI for unknowns."""
+    descriptions = df[desc_col].astype(str).tolist()
+    total_rows = len(df)
+    
+    # Priority Keywords for Accuracy
+    keyword_map = {
+        "ZOMATO": "Food", "SWIGGY": "Food", "RESTAURANT": "Food", "EATS": "Food",
+        "NIFTY BEES": "Investment", "IT BEES": "Investment", "ZERODHA": "Investment", 
+        "MUTUAL FUND": "Investment", "NIPPON": "Investment", "HDFC MF": "Investment",
+        "AMAZON": "Shopping", "FLIPKART": "Shopping", "MYNTRA": "Shopping",
+        "CRICKET": "Sports/Hobbies", "DECATHLON": "Sports/Hobbies",
+        "AIRTEL": "Bills", "JIO": "Bills", "ELECTRICITY": "Bills",
+        "RENT": "Rent", "SALARY": "Salary"
+    }
+
+    prompt = f"""
+    Categorize these {total_rows} bank transactions into: [Food, Investment, Shopping, Rent, Salary, Sports/Hobbies, Bills, Misc].
+    Return ONLY a JSON object with key 'categories' containing a list of {total_rows} strings.
+    Transactions: {descriptions}
+    """
+    
+    try:
+        response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
+        ai_suggestions = json.loads(response.text).get("categories", [])
+        
+        final_categories = []
+        for i, desc in enumerate(descriptions):
+            desc_upper = desc.upper()
+            matched_cat = None
+            for key, cat in keyword_map.items():
+                if key in desc_upper:
+                    matched_cat = cat
+                    break
+            
+            if matched_cat:
+                final_categories.append(matched_cat)
+            else:
+                # Use AI suggestion with fallback to Misc
+                final_categories.append(ai_suggestions[i] if i < len(ai_suggestions) else "Misc")
+        
+        return final_categories
+    except:
+        return ["Misc"] * total_rows
+
+# --- MAIN UI ---
 st.title("🏦 MoneyMentor: AI Financial Agent")
+st.markdown("Automated categorization with human-in-the-loop review.")
 
-# 1. Sidebar Setup
+# Sidebar Settings
 st.sidebar.header("💰 Account Setup")
 opening_balance = st.sidebar.number_input("Opening Balance (₹)", value=0.0)
 
-# 2. File Upload
-uploaded_file = st.file_uploader("Upload Statement", type=["pdf", "xlsx", "csv"])
+# File Upload logic
+uploaded_file = st.file_uploader("Upload Bank Statement", type=["pdf", "xlsx", "csv"])
 
 if uploaded_file:
-    # Load data into session state so it doesn't vanish on rerun
-    if 'main_df' not in st.session_state:
+    # Use Session State to keep data between refreshes
+    if 'raw_df' not in st.session_state:
         file_ext = uploaded_file.name.split('.')[-1]
         if file_ext == "pdf":
-            with pdfplumber.open(uploaded_file) as pdf:
-                data = []
-                for page in pdf.pages:
-                    table = page.extract_table()
-                    if table: data.extend(table)
-            st.session_state.main_df = pd.DataFrame(data[1:], columns=data[0])
+            st.session_state.raw_df = process_pdf(uploaded_file)
         elif file_ext == "xlsx":
-            st.session_state.main_df = pd.read_excel(uploaded_file)
+            st.session_state.raw_df = pd.read_excel(uploaded_file)
         else:
-            st.session_state.main_df = pd.read_csv(uploaded_file)
+            st.session_state.raw_df = pd.read_csv(uploaded_file)
         
-        # Initialize Category column
-        st.session_state.main_df["Category"] = "Uncategorized"
+        # Default Category
+        st.session_state.raw_df["Category"] = "Uncategorized"
 
-    df = st.session_state.main_df
+    df = st.session_state.raw_df
 
-    # 3. Column Mapping
-    st.markdown("### 🛠 Step 1: Map Columns")
+    # 1. Column Mapping UI
+    st.info("Identify your statement columns:")
     cols = df.columns.tolist()
     c1, c2, c3 = st.columns(3)
-    with c1: desc_col = st.selectbox("Description", options=cols)
-    with c2: debit_col = st.selectbox("Debit (-) [Spending]", options=cols)
-    with c3: credit_col = st.selectbox("Credit (+) [Income]", options=cols)
+    with c1: desc_col = st.selectbox("Transaction Description", options=cols)
+    with c2: debit_col = st.selectbox("Debit (-)", options=cols)
+    with c3: credit_col = st.selectbox("Credit (+)", options=cols)
 
-    # 4. AI Categorization
+    # 2. Trigger AI
     if st.button("🪄 Run AI Categorization"):
-        with st.spinner("AI is analyzing..."):
-            descriptions = df[desc_col].astype(str).tolist()
-            prompt = f"Categorize these into [Food, Investment, Shopping, Rent, Salary, Misc]: {descriptions[:50]}. Return ONLY JSON with key 'categories'."
-            
-            response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
-            cats = json.loads(response.text).get("categories", [])
-            
-            # Match lengths and update state
-            st.session_state.main_df["Category"] = (cats + ["Misc"] * len(df))[:len(df)]
-            st.rerun() # Refresh to show new categories
+        with st.spinner("AI Agent is analyzing transactions..."):
+            st.session_state.raw_df["Category"] = ai_categorize_hybrid(df, desc_col)
+            st.rerun()
 
-    # 5. Data Processing (Cleaning for the chart)
-    # We clean these every time to ensure the chart has actual numbers
-    df[debit_col] = clean_money(df[debit_col])
-    df[credit_col] = clean_money(df[credit_col])
+    # 3. Math Engine (Cleaning and Balance Calculation)
+    df[debit_col] = clean_money_column(df[debit_col])
+    df[credit_col] = clean_money_column(df[credit_col])
     df["Running Balance"] = opening_balance + (df[credit_col] - df[debit_col]).cumsum()
 
-    # 6. Review Editor
-    st.markdown("### 📝 Step 2: Review & Edit")
+    # 4. Review Editor
+    st.subheader("📝 Review & Edit")
     edited_df = st.data_editor(
         df,
         column_config={
-            "Category": st.column_config.SelectboxColumn("Category", options=["Food", "Investment", "Shopping", "Rent", "Salary", "Misc"]),
+            "Category": st.column_config.SelectboxColumn(
+                "Category", 
+                options=["Food", "Investment", "Shopping", "Rent", "Salary", "Sports/Hobbies", "Bills", "Misc"]
+            ),
             debit_col: st.column_config.NumberColumn("Debit", format="₹%.2f"),
             credit_col: st.column_config.NumberColumn("Credit", format="₹%.2f"),
             "Running Balance": st.column_config.NumberColumn("Balance", format="₹%.2f"),
         },
+        disabled=[c for c in df.columns if c != "Category"],
         use_container_width=True,
         hide_index=True
     )
 
-    # 7. Dashboard
+    # 5. Dashboard
     st.divider()
-    c1, c2 = st.columns(2)
-    
-    with c1:
+    final_balance = edited_df["Running Balance"].iloc[-1]
+    st.metric("Final Statement Balance", f"₹{final_balance:,.2f}", delta=f"{final_balance - opening_balance:,.2f}")
+
+    dash1, dash2 = st.columns(2)
+    with dash1:
         st.subheader("Spending by Category")
-        # Filter for rows that actually have spending
-        spending_df = edited_df[edited_df[debit_col] > 0]
-        if not spending_df.empty:
-            chart_data = spending_df.groupby("Category")[debit_col].sum()
-            st.bar_chart(chart_data)
+        # Only chart rows where spending (Debit) > 0
+        spend_summary = edited_df[edited_df[debit_col] > 0].groupby("Category")[debit_col].sum()
+        if not spend_summary.empty:
+            st.bar_chart(spend_summary)
         else:
-            st.warning("No spending (Debit > 0) detected yet.")
+            st.info("Run categorization to see spending chart.")
 
-    with c2:
-        st.subheader("Balance Trend")
+    with dash2:
+        st.subheader("Balance Over Time")
         st.line_chart(edited_df["Running Balance"])
-
-    st.metric("Final Balance", f"₹{edited_df['Running Balance'].iloc[-1]:,.2f}")

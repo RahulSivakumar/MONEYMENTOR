@@ -5,14 +5,14 @@ import json
 import google.generativeai as genai
 
 # --- INITIAL SETUP ---
-st.set_page_config(page_title="MoneyMentor: Gemini AI Agent", layout="wide")
+st.set_page_config(page_title="MoneyMentor: Gemini AI", layout="wide")
 
 # Check for Gemini API Key in secrets
 if "GEMINI_API_KEY" not in st.secrets:
     st.error("Please set your GEMINI_API_KEY in .streamlit/secrets.toml")
     st.stop()
 
-# Configure Gemini Agent
+# Configure Gemini Agent using the latest stable model
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 model = genai.GenerativeModel('gemini-2.5-flash')
 
@@ -26,17 +26,23 @@ def process_pdf(pdf_file):
             table = page.extract_table()
             if table:
                 all_data.extend(table) 
+    if not all_data:
+        return pd.DataFrame()
     return pd.DataFrame(all_data[1:], columns=all_data[0])
 
 def ai_categorize_gemini(df, desc_col):
-    """Sends transactions to Gemini for categorization in JSON format."""
+    """Categorizes transactions and ensures the output length matches the input."""
     descriptions = df[desc_col].astype(str).tolist()
-    categories = ["Food", "Rent", "Salary", "Investment", "Shopping", "Misc", "Travel", "Utilities"]
+    total_rows = len(df)
+    categories_options = ["Food", "Rent", "Salary", "Investment", "Shopping", "Misc", "Travel", "Utilities"]
     
     prompt = f"""
-    Act as a financial analyst. Categorize these transactions into: {categories}.
+    Act as a financial analyst. Categorize these transactions into: {categories_options}.
     Return a JSON object with the key 'categories' containing a list of strings.
-    Transactions: {descriptions[:50]}
+    Ensure you provide exactly {total_rows} categories.
+    
+    Transactions:
+    {descriptions}
     """
     
     try:
@@ -45,21 +51,26 @@ def ai_categorize_gemini(df, desc_col):
             generation_config={"response_mime_type": "application/json"}
         )
         result = json.loads(response.text)
-        return result.get("categories", ["Misc"] * len(descriptions))
+        suggested = result.get("categories", [])
+
+        # Logic to fix length mismatches (prevents ValueError)
+        if len(suggested) > total_rows:
+            return suggested[:total_rows]
+        elif len(suggested) < total_rows:
+            return suggested + ["Misc"] * (total_rows - len(suggested))
+        
+        return suggested
     except Exception as e:
         st.error(f"Gemini Agent Error: {e}")
-        return ["Misc"] * len(descriptions)
+        return ["Misc"] * total_rows
 
 # --- SIDEBAR: SETTINGS ---
 st.sidebar.header("Account Settings")
-# Step: Add opening balance input
 opening_balance = st.sidebar.number_input("Opening Balance (₹)", value=0.0, step=100.0)
 
 # --- MAIN UI ---
 st.title("🏦 MoneyMentor: AI Transaction Agent")
-st.write("Upload your statement, map your columns, and let Gemini handle the rest.")
 
-# Step: Support for multiple file types
 uploaded_file = st.file_uploader("Upload Statement", type=["pdf", "xlsx", "xls", "csv"])
 
 if uploaded_file:
@@ -74,10 +85,14 @@ if uploaded_file:
             st.session_state.raw_df = pd.read_csv(uploaded_file)
 
     df = st.session_state.raw_df.copy()
-    columns = df.columns.tolist()
+    
+    if df.empty:
+        st.warning("No data found in the uploaded file.")
+        st.stop()
 
-    # 2. Dynamic Column Mapping (Prevents KeyErrors)
-    st.info("Match your statement columns to the fields below:")
+    # 2. Dynamic Column Mapping
+    st.info("Map your statement columns to continue:")
+    columns = df.columns.tolist()
     col1, col2, col3 = st.columns(3)
     with col1:
         desc_col = st.selectbox("Transaction Description", options=columns)
@@ -90,20 +105,18 @@ if uploaded_file:
     if st.button("🤖 Categorize with Gemini"):
         with st.spinner("Gemini is analyzing transactions..."):
             df["Category"] = ai_categorize_gemini(df, desc_col)
-            st.session_state.raw_df = df
+            st.session_state.raw_df = df # Save the new column to state
 
     # 4. Calculation Logic
     df[withdrawal_col] = pd.to_numeric(df[withdrawal_col], errors='coerce').fillna(0)
     df[deposit_col] = pd.to_numeric(df[deposit_col], errors='coerce').fillna(0)
-    # Calculate running balance starting from the user's opening balance
     df["Running Balance"] = opening_balance + (df[deposit_col] - df[withdrawal_col]).cumsum()
 
-    # 5. Human-in-the-Loop Review
+    # 5. Review Table
     st.subheader("📝 Review and Refine")
     if "Category" not in df.columns:
         df["Category"] = "Uncategorized"
 
-    # Editable table allowing the user to change AI suggestions
     edited_df = st.data_editor(
         df,
         column_config={
@@ -114,11 +127,11 @@ if uploaded_file:
             ),
             "Running Balance": st.column_config.NumberColumn(format="₹%.2f"),
         },
-        disabled=[c for c in df.columns if c != "Category"], # Protect original data
+        disabled=[c for c in df.columns if c != "Category"], 
         use_container_width=True,
         hide_index=True
     )
 
     if st.button("Finalize Statement"):
-        st.success(f"Closing Balance: ₹{edited_df['Running Balance'].iloc[-1]:,.2f}")
+        st.success(f"Final Balance: ₹{edited_df['Running Balance'].iloc[-1]:,.2f}")
         st.balloons()

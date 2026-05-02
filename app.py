@@ -7,7 +7,6 @@ from openai import OpenAI
 # --- INITIAL SETUP ---
 st.set_page_config(page_title="MoneyMentor AI", layout="wide")
 
-# API Key Check
 if "OPENAI_API_KEY" not in st.secrets:
     st.error("Please set your OPENAI_API_KEY in Streamlit Secrets.")
     st.stop()
@@ -22,15 +21,16 @@ def process_pdf(pdf_file):
         for page in pdf.pages:
             table = page.extract_table()
             if table:
-                all_data.extend(table[1:]) 
-    return pd.DataFrame(all_data, columns=["Date", "Description", "Ref", "Withdrawal", "Deposit", "Balance"])
+                all_data.extend(table) 
+    # Use first row as header
+    df = pd.DataFrame(all_data[1:], columns=all_data[0])
+    return df
 
-def ai_categorize(df):
-    """Batch processes descriptions through the AI Agent."""
-    descriptions = df["Description"].astype(str).tolist()
+def ai_categorize(df, desc_col):
+    descriptions = df[desc_col].astype(str).tolist()
     categories = ["Food", "Rent", "Salary", "Investment", "Shopping", "Misc", "Travel"]
     
-    prompt = f"Categorize these transactions into {categories}. Return ONLY a JSON object with a key 'categories' containing a list of strings. Transactions: {descriptions[:20]}"
+    prompt = f"Categorize these transactions into {categories}. Return ONLY a JSON object with a key 'categories'. Transactions: {descriptions[:20]}"
     
     response = client.chat.completions.create(
         model="gpt-3.5-turbo",
@@ -41,50 +41,51 @@ def ai_categorize(df):
     result = json.loads(response.choices[0].message.content)
     return result.get("categories", ["Misc"] * len(descriptions))
 
-# --- SIDEBAR: OPENING BALANCE & SETTINGS ---
+# --- SIDEBAR ---
 st.sidebar.header("Account Settings")
-opening_balance = st.sidebar.number_input("Enter Opening Balance (₹)", value=0.0, step=100.0)
+opening_balance = st.sidebar.number_input("Opening Balance (₹)", value=0.0)
 
 # --- MAIN UI ---
-st.title("🏦 MoneyMentor: Multi-Format AI Agent")
-st.write("Upload PDF or Excel statements and refine categorizations.")
+st.title("🏦 MoneyMentor: AI Agent")
 
-# Updated to support Excel and CSV
 uploaded_file = st.file_uploader("Upload Statement", type=["pdf", "xlsx", "xls", "csv"])
 
 if uploaded_file:
-    # 1. Handle different file types
+    # 1. Load File
     if 'raw_df' not in st.session_state:
-        file_type = uploaded_file.name.split('.')[-1]
-        
-        if file_type == "pdf":
+        file_ext = uploaded_file.name.split('.')[-1]
+        if file_ext == "pdf":
             st.session_state.raw_df = process_pdf(uploaded_file)
-        elif file_type in ["xlsx", "xls"]:
+        elif file_ext in ["xlsx", "xls"]:
             st.session_state.raw_df = pd.read_excel(uploaded_file)
-        elif file_type == "csv":
+        else:
             st.session_state.raw_df = pd.read_csv(uploaded_file)
 
     df = st.session_state.raw_df.copy()
+    columns = df.columns.tolist()
 
-    # 2. AI Categorization
+    # 2. Dynamic Column Mapping (Fixes the KeyError)
+    st.info("Identify your statement columns below:")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        desc_col = st.selectbox("Transaction Description Column", options=columns)
+    with col2:
+        withdrawal_col = st.selectbox("Withdrawal/Debit Column", options=columns)
+    with col3:
+        deposit_col = st.selectbox("Deposit/Credit Column", options=columns)
+
+    # 3. Run AI Agent
     if st.button("🤖 Run AI Agent"):
-        with st.spinner("Categorizing transactions..."):
-            df["Category"] = ai_categorize(df)
+        with st.spinner("Agent is categorizing..."):
+            df["Category"] = ai_categorize(df, desc_col)
             st.session_state.raw_df = df
 
-    # 3. Running Balance Calculation
-    # We use the opening balance from the sidebar to calculate the 'Live Balance'
-    if "Withdrawal" in df.columns and "Deposit" in df.columns:
-        df["Withdrawal"] = pd.to_numeric(df["Withdrawal"], errors='coerce').fillna(0)
-        df["Deposit"] = pd.to_numeric(df["Deposit"], errors='coerce').fillna(0)
-        
-        # Calculate running balance: Opening + Deposits - Withdrawals
-        df["Calculated Balance"] = opening_balance + (df["Deposit"] - df["Withdrawal"]).cumsum()
+    # 4. Math Logic
+    df[withdrawal_col] = pd.to_numeric(df[withdrawal_col], errors='coerce').fillna(0)
+    df[deposit_col] = pd.to_numeric(df[deposit_col], errors='coerce').fillna(0)
+    df["Running Balance"] = opening_balance + (df[deposit_col] - df[withdrawal_col]).cumsum()
 
-    # 4. Human-in-the-Loop Review
-    st.subheader("📝 Review Transactions")
-    
-    # Ensure Category column exists for the editor
+    # 5. Review Table
     if "Category" not in df.columns:
         df["Category"] = "Uncategorized"
 
@@ -96,16 +97,9 @@ if uploaded_file:
                 options=["Food", "Rent", "Salary", "Investment", "Shopping", "Misc", "Travel"],
                 required=True,
             ),
-            "Calculated Balance": st.column_config.NumberColumn("Running Balance", format="₹%.2f"),
-            "Withdrawal": st.column_config.NumberColumn(format="₹%.2f"),
-            "Deposit": st.column_config.NumberColumn(format="₹%.2f"),
+            "Running Balance": st.column_config.NumberColumn(format="₹%.2f"),
         },
-        disabled=list(set(df.columns) - {"Category"}), # Only category is editable
-        hide_index=True,
-        use_container_width=True
+        disabled=[c for c in df.columns if c != "Category"],
+        use_container_width=True,
+        hide_index=True
     )
-
-    # Summary Section
-    if st.button("Finalize & Save"):
-        st.success(f"Final Balance: ₹{edited_df['Calculated Balance'].iloc[-1]:,.2f}")
-        st.balloons()

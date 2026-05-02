@@ -6,7 +6,7 @@ import google.generativeai as genai
 import re
 
 # --- INITIAL SETUP ---
-st.set_page_config(page_title="MoneyMentor Pro", layout="wide", page_icon="🏦")
+st.set_page_config(page_title="MoneyMentor: Category Inspector", layout="wide", page_icon="🏦")
 
 if "GEMINI_API_KEY" not in st.secrets:
     st.error("Missing GEMINI_API_KEY in .streamlit/secrets.toml")
@@ -15,7 +15,7 @@ if "GEMINI_API_KEY" not in st.secrets:
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 model = genai.GenerativeModel('gemini-2.5-flash')
 
-# --- DATA CLEANING ---
+# --- HELPERS ---
 def clean_numeric(val):
     if pd.isna(val) or val == "": return 0.0
     cleaned = re.sub(r'[^\d.]', '', str(val))
@@ -30,9 +30,9 @@ def process_pdf(pdf_file):
             if table: all_data.extend(table) 
     return pd.DataFrame(all_data[1:], columns=all_data[0]) if all_data else pd.DataFrame()
 
-# --- HYBRID AI ENGINE ---
 def ai_categorize(df, desc_col):
     descriptions = df[desc_col].astype(str).tolist()
+    # Personal Context: High priority for Investment and Sports
     keyword_map = {
         "ZOMATO": "Food", "SWIGGY": "Food", "ZERODHA": "Investment", 
         "NIFTY BEES": "Investment", "IT BEES": "Investment", "CRICKET": "Sports/Hobbies",
@@ -46,10 +46,9 @@ def ai_categorize(df, desc_col):
     except: return ["Misc"] * len(df)
 
 # --- APP UI ---
-st.title("🏦 MoneyMentor: Insightful Review")
+st.title("🏦 MoneyMentor: Category-Wise Review")
 
-# Sidebar
-st.sidebar.header("💰 Account Setup")
+st.sidebar.header("💰 Settings")
 opening_balance = st.sidebar.number_input("Opening Balance (₹)", value=0.0)
 
 uploaded_file = st.file_uploader("Upload Statement", type=["pdf", "xlsx", "csv"])
@@ -61,7 +60,6 @@ if uploaded_file:
         elif file_ext == "xlsx": st.session_state.raw_df = pd.read_excel(uploaded_file)
         else: st.session_state.raw_df = pd.read_csv(uploaded_file)
         st.session_state.raw_df["Category"] = "Uncategorized"
-        st.session_state.raw_df["Reviewed"] = False # Track review status
 
     df = st.session_state.raw_df
     cols = df.columns.tolist()
@@ -72,60 +70,59 @@ if uploaded_file:
     with c2: debit_col = st.selectbox("Debit (-)", options=cols)
     with c3: credit_col = st.selectbox("Credit (+)", options=cols)
 
-    if st.button("🪄 Run Smart Categorization"):
+    if st.button("🪄 Run AI Categorization"):
         st.session_state.raw_df["Category"] = ai_categorize(df, desc_col)
         st.rerun()
 
-    # Data Prep
+    # Numeric Prep
     df["Debit_Num"] = df[debit_col].apply(clean_numeric)
     df["Credit_Num"] = df[credit_col].apply(clean_numeric)
     df["Running Balance"] = opening_balance + (df["Credit_Num"] - df["Debit_Num"]).cumsum()
 
-    # --- STEP-BY-STEP REVIEW INTERFACE ---
-    st.subheader("📝 Review Queue")
-    
-    # Split data into pending and finalized
-    pending_df = df[df["Category"] == "Uncategorized"]
-    ready_df = df[df["Category"] != "Uncategorized"]
-
-    tab1, tab2 = st.tabs([f"Pending Review ({len(pending_df)})", f"Finalized ({len(ready_df)})"])
-
-    with tab1:
-        if len(pending_df) > 0:
-            st.info("The items below need your attention.")
-            edited_pending = st.data_editor(
-                pending_df,
-                column_config={"Category": st.column_config.SelectboxColumn("Category", options=["Food", "Investment", "Shopping", "Rent", "Salary", "Sports/Hobbies", "Bills", "Misc"])},
-                disabled=list(set(df.columns) - {"Category"}),
-                use_container_width=True, hide_index=True, key="pending_editor"
-            )
-        else:
-            st.success("All items categorized! Check the Finalized tab.")
-
-    with tab2:
-        st.data_editor(
-            ready_df,
-            column_config={"Category": st.column_config.SelectboxColumn("Category", options=["Food", "Investment", "Shopping", "Rent", "Salary", "Sports/Hobbies", "Bills", "Misc"])},
-            disabled=list(set(df.columns) - {"Category"}),
-            use_container_width=True, hide_index=True, key="final_editor"
-        )
-
-    # --- INSIGHTFUL DASHBOARD ---
+    # --- NEW CATEGORY-WISE INSPECTOR ---
     st.divider()
-    st.subheader("📊 Financial Insights")
+    st.subheader("🔍 Category Inspector")
     
-    dash1, dash2 = st.columns(2)
-    
-    with dash1:
-        st.write("**Spending Distribution**")
-        spend_summary = df[df["Debit_Num"] > 0].groupby("Category")["Debit_Num"].sum()
-        st.bar_chart(spend_summary)
+    # Get unique categories present in the data
+    all_cats = ["All"] + sorted(df["Category"].unique().tolist())
+    selected_cat = st.selectbox("Select Category to Review/Edit:", options=all_cats)
 
-    with dash2:
-        st.write("**Cash Flow Momentum**")
-        # Insight: Compare daily spending against the running balance
+    # Filter data based on selection
+    if selected_cat == "All":
+        display_df = df
+    else:
+        display_df = df[df["Category"] == selected_cat]
+
+    st.write(f"Showing **{len(display_df)}** transactions for: **{selected_cat}**")
+    
+    edited_df = st.data_editor(
+        display_df,
+        column_config={
+            "Category": st.column_config.SelectboxColumn("Category", options=["Food", "Investment", "Shopping", "Rent", "Salary", "Sports/Hobbies", "Bills", "Misc"]),
+            "Debit_Num": st.column_config.NumberColumn("Debit", format="₹%.2f"),
+            "Credit_Num": st.column_config.NumberColumn("Credit", format="₹%.2f"),
+            "Running Balance": st.column_config.NumberColumn("Balance", format="₹%.2f"),
+        },
+        disabled=list(set(df.columns) - {"Category"}),
+        use_container_width=True, hide_index=True, key=f"editor_{selected_cat}"
+    )
+
+    # Update the main session state with edits made in the filtered view
+    if st.button("✅ Save Changes for this Category"):
+        st.session_state.raw_df.update(edited_df)
+        st.success(f"Updated {selected_cat} categories successfully!")
+
+    # --- INSIGHTS ---
+    st.divider()
+    st.subheader("📊 Summary Insights")
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        st.write("**Expense Split**")
+        st.bar_chart(df[df["Debit_Num"] > 0].groupby("Category")["Debit_Num"].sum())
+    with c2:
+        st.write("**Net Flow (Income vs Expense)**")
         df["Net Flow"] = df["Credit_Num"] - df["Debit_Num"]
         st.area_chart(df[["Net Flow", "Running Balance"]])
-        st.caption("Grey Area: Net daily flow | Blue Line: Overall Balance")
 
-    st.metric("Closing Balance", f"₹{df['Running Balance'].iloc[-1]:,.2f}")
+    st.metric("Final Statement Balance", f"₹{df['Running Balance'].iloc[-1]:,.2f}")

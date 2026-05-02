@@ -6,7 +6,7 @@ import google.generativeai as genai
 import re
 
 # --- INITIAL SETUP ---
-st.set_page_config(page_title="MoneyMentor: AI Agent", layout="wide")
+st.set_page_config(page_title="MoneyMentor: AI Expert", layout="wide")
 
 if "GEMINI_API_KEY" not in st.secrets:
     st.error("Missing GEMINI_API_KEY in .streamlit/secrets.toml")
@@ -30,25 +30,25 @@ def process_pdf(pdf_file):
             if table: all_data.extend(table) 
     return pd.DataFrame(all_data[1:], columns=all_data[0]) if all_data else pd.DataFrame()
 
-# --- NEW AI-ONLY ENGINE (No Keywords) ---
-def ai_categorize_pure(df, desc_col):
+# --- THE HIGH-INTENSITY ENGINE ---
+def ai_categorize_aggressive(df, desc_col):
     descriptions = df[desc_col].astype(str).tolist()
     total_rows = len(df)
     
-    # We provide a "Financial Persona" to the AI to ensure it understands Indian transactions
+    # We are now injecting YOUR specific profile into the AI's logic
     prompt = f"""
-    Act as a professional Indian Chartered Accountant. Categorize these {total_rows} transactions.
+    Act as a Senior Financial Auditor. Categorize these {total_rows} transactions.
     
-    Allowed Categories: [Food, Investment, Shopping, Rent, Salary, Sports/Hobbies, Bills, Misc]
+    CRITICAL INSTRUCTIONS:
+    1. DO NOT DEFAULT TO 'Misc' unless absolutely necessary.
+    2. 'Investment': Look for brokerage names (Zerodha), Mutual Funds, or ETFs like 'Nifty BeES' or 'IT BeES'. 
+    3. 'Sports/Hobbies': You are a cricket enthusiast. Tag any transaction related to 'Cricket', 'Leather Ball', or sports gear.
+    4. 'Food': Categorize all food delivery (Zomato/Swiggy) and restaurant visits here.
+    5. 'Shopping': Amazon, Flipkart, Myntra, etc.
     
-    Logic Instructions:
-    1. 'Investment': Look for brokerage names (Zerodha, Angel), Mutual Fund houses, or ETF names (BeES).
-    2. 'Sports/Hobbies': Look for cricket-related terms, sports academies, or sports equipment stores.
-    3. 'Food': Look for delivery apps, restaurants, cafes, or bakeries.
-    4. 'Shopping': Look for major e-commerce platforms.
-    5. 'Misc': Use this for personal UPI transfers, cash withdrawals, or obscure narrations.
+    Categories to use: [Food, Investment, Shopping, Rent, Salary, Sports/Hobbies, Bills, Misc]
     
-    Return ONLY a JSON object with key 'categories' containing a list of {total_rows} strings.
+    Return a JSON object with key 'categories'.
     Transactions: {descriptions}
     """
     
@@ -59,16 +59,15 @@ def ai_categorize_pure(df, desc_col):
         )
         suggestions = json.loads(response.text).get("categories", [])
         
-        # Ensure the output length matches the input length exactly
+        # Length matching
         if len(suggestions) < total_rows:
             suggestions.extend(["Misc"] * (total_rows - len(suggestions)))
         return suggestions[:total_rows]
-    except Exception as e:
-        st.error(f"AI Connection Error: {e}")
+    except Exception:
         return ["Misc"] * total_rows
 
 # --- MAIN UI ---
-st.title("🏦 MoneyMentor: AI Categorization")
+st.title("🏦 MoneyMentor: AI Logic V2")
 
 st.sidebar.header("💰 Settings")
 opening_balance = st.sidebar.number_input("Opening Balance (₹)", value=0.0)
@@ -86,58 +85,52 @@ if uploaded_file:
     df = st.session_state.raw_df
     cols = df.columns.tolist()
 
-    st.markdown("### 🛠 1. Map Columns")
+    # Column Mapping
     c1, c2, c3 = st.columns(3)
     with c1: desc_col = st.selectbox("Description", options=cols)
     with c2: debit_col = st.selectbox("Debit (-)", options=cols)
     with c3: credit_col = st.selectbox("Credit (+)", options=cols)
 
-    if st.button("🪄 Run AI Categorization"):
-        with st.spinner("AI Agent is classifying data..."):
-            st.session_state.raw_df["Category"] = ai_categorize_pure(df, desc_col)
+    if st.button("🪄 Run High-Intensity AI"):
+        with st.spinner("Analyzing with high precision..."):
+            st.session_state.raw_df["Category"] = ai_categorize_aggressive(df, desc_col)
             st.rerun()
 
-    # Calculation logic
+    # Calculations
     df["Debit_Num"] = df[debit_col].apply(clean_numeric)
     df["Credit_Num"] = df[credit_col].apply(clean_numeric)
     df["Running Balance"] = opening_balance + (df["Credit_Num"] - df["Debit_Num"]).cumsum()
 
-    # --- THE INSPECTOR UI ---
-    st.markdown("### 📝 2. Review and Refine")
-    
-    unique_cats = sorted(df["Category"].unique().tolist())
-    selected_cat = st.selectbox("Select Category to Verify:", options=unique_cats)
+    # --- CATEGORY FOCUS REVIEW ---
+    st.markdown("### 🔍 Category Inspector")
+    current_cats = sorted(df["Category"].unique().tolist())
+    selected_cat = st.selectbox("Focus on Category:", options=current_cats)
 
     mask = df["Category"] == selected_cat
     display_df = df[mask].copy()
 
-    # Human-in-the-Loop Editor
     edited_df = st.data_editor(
         display_df[[desc_col, "Category", "Debit_Num"]],
         column_config={
-            "Category": st.column_config.SelectboxColumn(
-                "Category", 
-                options=["Food", "Investment", "Shopping", "Rent", "Salary", "Sports/Hobbies", "Bills", "Misc"]
-            ),
+            "Category": st.column_config.SelectboxColumn("Category", options=["Food", "Investment", "Shopping", "Rent", "Salary", "Sports/Hobbies", "Bills", "Misc"]),
             "Debit_Num": st.column_config.NumberColumn("Amount", format="₹%.2f"),
         },
         disabled=[desc_col, "Debit_Num"],
-        use_container_width=True, hide_index=True, key=f"ed_{selected_cat}"
+        use_container_width=True, hide_index=True, key=f"insp_{selected_cat}"
     )
 
-    if st.button("Save Edits"):
+    if st.button("Confirm Changes"):
         st.session_state.raw_df.loc[mask, "Category"] = edited_df["Category"].values
-        st.success("Changes saved!")
+        st.success("Locked in!")
         st.rerun()
 
     # --- INSIGHTS ---
     st.divider()
+    st.subheader("📊 Momentum & Spending")
     col1, col2 = st.columns(2)
     with col1:
-        st.subheader("Spending Split")
         st.bar_chart(df[df["Debit_Num"] > 0].groupby("Category")["Debit_Num"].sum())
     with col2:
-        st.subheader("Balance Momentum")
         df["Net Flow"] = df["Credit_Num"] - df["Debit_Num"]
         st.area_chart(df[["Net Flow", "Running Balance"]])
 

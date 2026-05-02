@@ -6,7 +6,7 @@ import google.generativeai as genai
 import re
 
 # --- INITIAL SETUP ---
-st.set_page_config(page_title="MoneyMentor: Pro Control", layout="wide")
+st.set_page_config(page_title="MoneyMentor: Dynamic Control", layout="wide")
 
 if "GEMINI_API_KEY" not in st.secrets:
     st.error("Missing GEMINI_API_KEY in .streamlit/secrets.toml")
@@ -30,20 +30,16 @@ def process_pdf(pdf_file):
             if table: all_data.extend(table) 
     return pd.DataFrame(all_data[1:], columns=all_data[0]) if all_data else pd.DataFrame()
 
-# --- THE CONTROL-FIRST ENGINE ---
-def ai_categorize_controlled(df, desc_col, manual_map):
+# --- THE DYNAMIC ENGINE ---
+def ai_categorize_dynamic(df, desc_col, manual_map, current_categories):
     descriptions = df[desc_col].astype(str).tolist()
-    total_rows = len(df)
-    
     final_categories = []
     indices_for_ai = []
     descriptions_for_ai = []
 
-    # STEP 1: Check Manual Mapping First
     for idx, desc in enumerate(descriptions):
         upper_desc = desc.upper()
         matched_cat = None
-        
         for keyword, category in manual_map.items():
             if keyword.upper() in upper_desc:
                 matched_cat = category
@@ -52,14 +48,13 @@ def ai_categorize_controlled(df, desc_col, manual_map):
         if matched_cat:
             final_categories.append(matched_cat)
         else:
-            final_categories.append("Misc") # Placeholder
+            final_categories.append("Misc")
             indices_for_ai.append(idx)
             descriptions_for_ai.append(desc)
 
-    # STEP 2: Use AI only for the leftovers
     if descriptions_for_ai:
         prompt = f"""
-        Categorize these transactions into: [Food, Investment, Shopping, Rent, Salary, Sports/Hobbies, Bills, Misc].
+        Categorize these transactions into: {current_categories}.
         Return ONLY a JSON object with key 'categories'.
         Transactions: {descriptions_for_ai[:50]}
         """
@@ -75,21 +70,32 @@ def ai_categorize_controlled(df, desc_col, manual_map):
     return final_categories
 
 # --- MAIN UI ---
-st.title("🏦 MoneyMentor: Advanced Control Mode")
+st.title("🏦 MoneyMentor: Dynamic Category Control")
 
-# Sidebar: Your custom rules
+# 1. CATEGORY MANAGEMENT
+if 'categories' not in st.session_state:
+    st.session_state.categories = ["Food", "Investment", "Shopping", "Rent", "Salary", "Sports/Hobbies", "Bills", "Misc"]
+
+st.sidebar.header("📂 Category Manager")
+new_cat_name = st.sidebar.text_input("Create New Category")
+if st.sidebar.button("Add Category") and new_cat_name:
+    if new_cat_name not in st.session_state.categories:
+        st.session_state.categories.append(new_cat_name)
+        st.sidebar.success(f"Added {new_cat_name}")
+
+# 2. RULE MANAGEMENT
 st.sidebar.header("🎯 Custom Rules")
-st.sidebar.info("Add keywords here to force categorization.")
 if 'rules' not in st.session_state:
-    st.session_state.rules = {"NIFTY BEES": "Investment", "IT BEES": "Investment", "ZERODHA": "Investment", "ZOMATO": "Food", "CRICKET": "Sports/Hobbies"}
+    st.session_state.rules = {"NIFTY BEES": "Investment", "ZERODHA": "Investment"}
 
-new_key = st.sidebar.text_input("Keyword (e.g. SWIGGY)")
-new_cat = st.sidebar.selectbox("Category", ["Food", "Investment", "Shopping", "Rent", "Salary", "Sports/Hobbies", "Bills", "Misc"])
+rule_key = st.sidebar.text_input("Keyword (e.g. NETFLIX)")
+rule_cat = st.sidebar.selectbox("Assign to Category", st.session_state.categories)
 if st.sidebar.button("Add Rule"):
-    st.session_state.rules[new_key] = new_cat
+    st.session_state.rules[rule_key] = rule_cat
 
 st.sidebar.write("Active Rules:", st.session_state.rules)
 
+# 3. FILE PROCESSING
 uploaded_file = st.file_uploader("Upload Statement", type=["pdf", "xlsx", "csv"])
 
 if uploaded_file:
@@ -109,23 +115,24 @@ if uploaded_file:
     with c3: credit_col = st.selectbox("Credit (+)", options=cols)
 
     if st.button("🪄 Run Smart Categorization"):
-        st.session_state.raw_df["Category"] = ai_categorize_controlled(df, desc_col, st.session_state.rules)
+        st.session_state.raw_df["Category"] = ai_categorize_dynamic(df, desc_col, st.session_state.rules, st.session_state.categories)
         st.rerun()
 
-    # Calculations
     df["Debit_Num"] = df[debit_col].apply(clean_numeric)
-    df["Credit_Num"] = df[credit_col].apply(clean_numeric)
 
-    # --- CATEGORY FOCUS REVIEW ---
-    st.subheader("🔍 Review Category Wise")
-    current_cats = sorted(df["Category"].unique().tolist())
-    selected_cat = st.selectbox("Select Category:", options=current_cats)
+    # 4. REVIEW BY CATEGORY
+    st.subheader("🔍 Category Review")
+    current_found_cats = sorted(df["Category"].unique().tolist())
+    selected_cat = st.selectbox("View Category:", current_found_cats)
 
     mask = df["Category"] == selected_cat
     display_df = df[mask].copy()
 
     edited_df = st.data_editor(
         display_df[[desc_col, "Category", "Debit_Num"]],
+        column_config={
+            "Category": st.column_config.SelectboxColumn("Category", options=st.session_state.categories)
+        },
         use_container_width=True, hide_index=True, key=f"edit_{selected_cat}"
     )
 
@@ -133,7 +140,7 @@ if uploaded_file:
         st.session_state.raw_df.loc[mask, "Category"] = edited_df["Category"].values
         st.rerun()
 
-    # --- INSIGHTS ---
+    # 5. CHART
     st.divider()
-    st.subheader("📊 Spending Distribution")
+    st.subheader("📊 Spending by Category")
     st.bar_chart(df[df["Debit_Num"] > 0].groupby("Category")["Debit_Num"].sum())

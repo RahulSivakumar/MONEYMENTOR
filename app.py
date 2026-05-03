@@ -11,14 +11,13 @@ except ImportError:
     os.system(f"{sys.executable} -m pip install matplotlib")
     st.rerun()
 
-# --- 2. CONFIGURATION & TEMPLATES ---
+# --- 2. CONFIGURATION ---
 st.set_page_config(page_title="MoneyMentor Pro", layout="wide", page_icon="🏦")
 
 BANK_TEMPLATES = {
     "HDFC Bank": {"description": "Narration", "debit": "Withdrawal Amt.", "credit": "Deposit Amt.", "date": "Date"},
     "ICICI Bank": {"description": "Description", "debit": "Debit", "credit": "Credit", "date": "Value Date"},
     "SBI (State Bank)": {"description": "Description", "debit": "Debit", "credit": "Credit", "date": "Date"},
-    "Custom / Manual Mapping": None
 }
 
 def master_categorizer(description):
@@ -45,13 +44,11 @@ def process_data(df, mapping):
     standard_df['Description'] = df[mapping['description']]
     standard_df['Debit'] = df[mapping['debit']].apply(clean_currency)
     standard_df['Credit'] = df[mapping['credit']].apply(clean_currency)
-    standard_df = standard_df.drop_duplicates(subset=['Date', 'Description', 'Debit', 'Credit'])
+    standard_df = standard_df.drop_duplicates()
     standard_df['Category'] = standard_df['Description'].apply(master_categorizer)
     return standard_df
 
-# --- 3. UI LAYOUT & SESSION STATE ---
-st.title("🏦 MoneyMentor: Professional Edition")
-
+# --- 3. STATE MANAGEMENT ---
 if 'main_df' not in st.session_state:
     st.session_state.main_df = None
 
@@ -62,100 +59,65 @@ with st.sidebar:
     
     if st.button("⚡ Start Smart Audit") and uploaded_file:
         try:
-            if uploaded_file.name.endswith('.csv'):
-                df_raw = pd.read_csv(uploaded_file)
-            else:
-                df_raw = pd.read_excel(uploaded_file)
-            
-            mapping = BANK_TEMPLATES[bank_choice]
-            if mapping:
-                st.session_state.main_df = process_data(df_raw, mapping)
-            else:
-                st.info("Manual mapping required.")
+            df_raw = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
+            st.session_state.main_df = process_data(df_raw, BANK_TEMPLATES[bank_choice])
         except Exception as e:
-            st.error(f"Analysis Error: {e}")
+            st.error(f"Error: {e}")
 
-# --- 4. INTEGRATED EDITING TABS ---
+# --- 4. THE DRILL-DOWN UI ---
 if st.session_state.main_df is not None:
     
-    tab_deb, tab_cre, tab_sum = st.tabs([
-        "🔴 DEBIT AUDIT", 
-        "🟢 CREDIT AUDIT", 
-        "📊 AUDIT SUMMARY"
-    ])
+    tab_deb, tab_cre, tab_sum = st.tabs(["🔴 DEBITS", "🟢 CREDITS", "📊 DRILL-DOWN SUMMARY"])
     
-    with tab_deb:
-        # Hide Credit column for cleaner Debit UI
-        debits_only = st.session_state.main_df[st.session_state.main_df['Debit'] > 0].drop(columns=['Credit']).copy()
-        
-        col1, col2 = st.columns([2, 1])
-        col1.metric("Total Expenses", f"₹{debits_only['Debit'].sum():,.2f}")
-        col2.info("💡 High-value transactions are highlighted in red.")
-
-        # Styling: High values (> 5000) get a light red background
-        def highlight_high_debits(s):
-            return ['background-color: #ffcccc' if (isinstance(v, float) and v > 5000) else '' for v in s]
-
-        edited_debits = st.data_editor(
-            debits_only,
+    # --- HELPER: EDITING LOGIC ---
+    def render_editor(df_to_edit, key_prefix, show_cols):
+        edited = st.data_editor(
+            df_to_edit,
             column_config={
                 "Category": st.column_config.SelectboxColumn("Category", options=["Market & Wealth", "Food & Lifestyle", "Shopping", "Utilities", "Salary & Income", "Action Required"], required=True),
-                "Debit": st.column_config.NumberColumn("Debit (₹)", format="%.2f", min_value=0.0),
+                "Debit": st.column_config.NumberColumn("Debit (₹)", format="%.2f"),
+                "Credit": st.column_config.NumberColumn("Credit (₹)", format="%.2f"),
             },
             disabled=["Date", "Description"],
             use_container_width=True,
-            key="debit_editor"
+            key=f"{key_prefix}_editor"
         )
-        
-        if not edited_debits.equals(debits_only):
-            # Sync back to main_df while maintaining the Credit column
-            st.session_state.main_df.update(edited_debits)
+        if not edited.equals(df_to_edit):
+            st.session_state.main_df.update(edited)
             st.rerun()
+
+    with tab_deb:
+        render_editor(st.session_state.main_df[st.session_state.main_df['Debit'] > 0].drop(columns=['Credit']), "deb_tab", ["Debit"])
 
     with tab_cre:
-        # Hide Debit column for cleaner Credit UI
-        credits_only = st.session_state.main_df[st.session_state.main_df['Credit'] > 0].drop(columns=['Debit']).copy()
-        
-        st.metric("Total Income", f"₹{credits_only['Credit'].sum():,.2f}")
-        
-        edited_credits = st.data_editor(
-            credits_only,
-            column_config={
-                "Category": st.column_config.SelectboxColumn("Category", options=["Market & Wealth", "Food & Lifestyle", "Shopping", "Utilities", "Salary & Income", "Action Required"], required=True),
-                "Credit": st.column_config.NumberColumn("Credit (₹)", format="%.2f", min_value=0.0),
-            },
-            disabled=["Date", "Description"],
-            use_container_width=True,
-            key="credit_editor"
-        )
-        
-        if not edited_credits.equals(credits_only):
-            st.session_state.main_df.update(edited_credits)
-            st.rerun()
+        render_editor(st.session_state.main_df[st.session_state.main_df['Credit'] > 0].drop(columns=['Debit']), "cre_tab", ["Credit"])
 
     with tab_sum:
-        st.subheader("Financial Breakdown")
-        summary_df = st.session_state.main_df.groupby('Category').agg({
-            'Debit': 'sum',
-            'Credit': 'sum',
-            'Description': 'count'
-        }).rename(columns={'Description': 'Count'})
+        st.subheader("Category-Wise Drill Down")
+        st.caption("Click a category to expand and edit specific line items.")
         
-        summary_df['Net Impact'] = summary_df['Credit'] - summary_df['Debit']
+        categories = st.session_state.main_df['Category'].unique()
         
-        # Action Required Metric
-        action_count = summary_df.loc["Action Required", "Count"] if "Action Required" in summary_df.index else 0
-        
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Total Line Items", len(st.session_state.main_df))
-        c2.metric("Items Pending Review", int(action_count), delta=None, delta_color="inverse")
-        if action_count > 0:
-            c2.warning(f"⚠️ You have {int(action_count)} items labeled 'Action Required'.")
-        else:
-            c2.success("✅ All items categorized!")
-        c3.metric("Net Flow", f"₹{(st.session_state.main_df['Credit'].sum() - st.session_state.main_df['Debit'].sum()):,.2f}")
+        for cat in sorted(categories):
+            cat_df = st.session_state.main_df[st.session_state.main_df['Category'] == cat]
+            total_spent = cat_df['Debit'].sum()
+            total_earned = cat_df['Credit'].sum()
+            count = len(cat_df)
+            
+            # Formatting the label for the expander
+            label = f"{cat} — ({count} Items) | Out: ₹{total_spent:,.2f} | In: ₹{total_earned:,.2f}"
+            
+            # Using st.expander for the "Dropdown" feel
+            with st.expander(label, expanded=(cat == "Action Required")):
+                st.write(f"Editing all transactions categorized as **{cat}**:")
+                render_editor(cat_df, f"sum_{cat}", ["Debit", "Credit"])
 
-        st.table(summary_df.style.format({'Debit': '₹{:,.2f}', 'Credit': '₹{:,.2f}', 'Net Impact': '₹{:,.2f}'}))
+        # Final Footer Summary
+        st.divider()
+        action_count = len(st.session_state.main_df[st.session_state.main_df['Category'] == "Action Required"])
+        c1, c2 = st.columns(2)
+        c1.metric("Pending Review", action_count, delta="Action Required" if action_count > 0 else "All Clear", delta_color="inverse")
+        c2.metric("Net Cash Flow", f"₹{(st.session_state.main_df['Credit'].sum() - st.session_state.main_df['Debit'].sum()):,.2f}")
 
 else:
     st.info("Upload your bank statement and click 'Start Smart Audit' to begin.")

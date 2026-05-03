@@ -4,61 +4,61 @@ import numpy as np
 import sys
 import os
 
-# --- 1. ENVIRONMENT & UI STYLING ---
-try:
-    import matplotlib
-except ImportError:
-    os.system(f"{sys.executable} -m pip install matplotlib")
-    st.rerun()
-
+# --- 1. THEME & ADVANCED CSS INJECTION ---
 st.set_page_config(page_title="MoneyMentor Pro", layout="wide", page_icon="🏦")
 
-# Custom CSS for a "Pro" Colorful UI
 st.markdown("""
     <style>
-        /* Sidebar Styling */
-        [data-testid="stSidebar"] {
-            background-color: #f0f2f6;
-            border-right: 2px solid #6c5ce7;
-        }
-        /* Header Styling */
-        .main-header {
-            font-size: 35px;
-            font-weight: bold;
-            color: #6c5ce7;
-            text-align: center;
-            margin-bottom: 20px;
-        }
-        /* Metric Styling */
-        [data-testid="stMetricValue"] {
-            color: #2d3436;
-        }
-        /* Tabs Styling */
-        .stTabs [data-baseweb="tab-list"] {
-            gap: 10px;
-        }
-        .stTabs [data-baseweb="tab"] {
-            height: 50px;
-            white-space: pre-wrap;
-            background-color: #f1f2f6;
-            border-radius: 5px;
-            gap: 1px;
-            padding-top: 10px;
-            padding-bottom: 10px;
-        }
-        .stTabs [aria-selected="true"] {
-            background-color: #6c5ce7 !important;
-            color: white !important;
-        }
-        /* Highlight Action Required items */
-        .action-needed {
-            color: #d63031;
-            font-weight: bold;
-        }
+    /* Global Background and Fonts */
+    .stApp {
+        background-color: #f8f9fc;
+    }
+    
+    /* Modern Sidebar */
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #6c5ce7 0%, #a29bfe 100%);
+        color: white;
+    }
+    [data-testid="stSidebar"] .stMarkdown p {
+        color: white;
+    }
+    
+    /* Glowing Dashboard Header */
+    .dashboard-title {
+        background: #ffffff;
+        padding: 20px;
+        border-radius: 15px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+        border-left: 10px solid #6c5ce7;
+        margin-bottom: 25px;
+    }
+    
+    /* Category Cards */
+    .cat-card {
+        padding: 15px;
+        border-radius: 10px;
+        background: white;
+        border: 1px solid #e1e4e8;
+        margin-bottom: 10px;
+    }
+
+    /* Tab Styling */
+    .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {
+        font-size: 18px;
+        font-weight: 600;
+    }
+    
+    /* Metric Card Customization */
+    [data-testid="stMetric"] {
+        background: white;
+        padding: 15px;
+        border-radius: 12px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.03);
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. CONFIGURATION ---
+# --- 2. LOGIC ENGINE ---
 BANK_TEMPLATES = {
     "HDFC Bank": {"description": "Narration", "debit": "Withdrawal Amt.", "credit": "Deposit Amt.", "date": "Date"},
     "ICICI Bank": {"description": "Description", "debit": "Debit", "credit": "Credit", "date": "Value Date"},
@@ -79,98 +79,90 @@ def master_categorizer(description):
             return category
     return "Action Required"
 
-def clean_currency(val):
-    if pd.isna(val) or val == "" or val == " ": return 0.0
-    return float(str(val).replace(',', '').replace('₹', '').strip())
-
 def process_data(df, mapping):
-    standard_df = pd.DataFrame()
-    standard_df['Date'] = df[mapping['date']]
-    standard_df['Description'] = df[mapping['description']]
-    standard_df['Debit'] = df[mapping['debit']].apply(clean_currency)
-    standard_df['Credit'] = df[mapping['credit']].apply(clean_currency)
-    standard_df = standard_df.drop_duplicates()
-    standard_df['Category'] = standard_df['Description'].apply(master_categorizer)
-    return standard_df
+    std = pd.DataFrame()
+    std['Date'] = df[mapping['date']]
+    std['Description'] = df[mapping['description']]
+    for col in ['Debit', 'Credit']:
+        std[col] = df[mapping[col.lower()]].replace('[₹, ]', '', regex=True).fillna(0).astype(float)
+    std = std.drop_duplicates()
+    std['Category'] = std['Description'].apply(master_categorizer)
+    return std
 
-# --- 3. STATE MANAGEMENT ---
+# --- 3. DASHBOARD HEADER ---
+st.markdown("""
+    <div class="dashboard-title">
+        <h1 style='margin:0; color:#2d3436;'>🏦 MoneyMentor <span style='color:#6c5ce7;'>Pro</span></h1>
+        <p style='margin:0; color:#636e72;'>Intelligent Financial Auditor & Investment Tracker</p>
+    </div>
+    """, unsafe_allow_html=True)
+
 if 'main_df' not in st.session_state:
     st.session_state.main_df = None
 
-st.markdown('<p class="main-header">🏦 MoneyMentor: Professional Edition</p>', unsafe_allow_html=True)
-
 with st.sidebar:
-    st.header("⚙️ Project Setup")
-    bank_choice = st.selectbox("Select Bank Template", list(BANK_TEMPLATES.keys()))
-    uploaded_file = st.file_uploader("Upload Statement", type=['csv', 'xlsx'])
+    st.markdown("### 🛠️ Workspace Controls")
+    bank = st.selectbox("Select Institution", list(BANK_TEMPLATES.keys()))
+    file = st.file_uploader("Drop Statement Here", type=['csv', 'xlsx'])
     
-    if st.button("🚀 Start Smart Audit") and uploaded_file:
-        try:
-            df_raw = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-            st.session_state.main_df = process_data(df_raw, BANK_TEMPLATES[bank_choice])
-        except Exception as e:
-            st.error(f"Error: {e}")
+    if st.button("🚀 Run Smart Audit") and file:
+        df_raw = pd.read_csv(file) if file.name.endswith('.csv') else pd.read_excel(file)
+        st.session_state.main_df = process_data(df_raw, BANK_TEMPLATES[bank])
 
-# --- 4. THE COLOURFUL DRILL-DOWN UI ---
+# --- 4. THE PRO WORKFLOW ---
 if st.session_state.main_df is not None:
     
-    tab_deb, tab_cre, tab_sum = st.tabs(["🔴 DEBITS", "🟢 CREDITS", "📊 DRILL-DOWN SUMMARY"])
+    # Global Metrics Row
+    m1, m2, m3, m4 = st.columns(4)
+    total_out = st.session_state.main_df['Debit'].sum()
+    total_in = st.session_state.main_df['Credit'].sum()
+    pending = len(st.session_state.main_df[st.session_state.main_df['Category'] == "Action Required"])
     
-    def render_editor(df_to_edit, key_prefix, color_map=None):
-        # We wrap in a container for styling
+    m1.metric("Total Expenses", f"₹{total_out:,.2f}", delta_color="inverse")
+    m2.metric("Total Income", f"₹{total_in:,.2f}")
+    m3.metric("Net Savings", f"₹{(total_in - total_out):,.2f}")
+    m4.metric("Pending Review", pending, delta="Action Required" if pending > 0 else "Ready", delta_color="inverse")
+
+    st.write("##") # Spacer
+
+    tab_deb, tab_cre, tab_sum = st.tabs(["🔴 Expenses", "🟢 Income", "📊 Master Drill-Down"])
+    
+    def render_pro_editor(df_to_edit, key):
         edited = st.data_editor(
             df_to_edit,
             column_config={
                 "Category": st.column_config.SelectboxColumn("Category", options=["Market & Wealth", "Food & Lifestyle", "Shopping", "Utilities", "Salary & Income", "Action Required"], required=True),
-                "Debit": st.column_config.NumberColumn("Debit (₹)", format="%.2f"),
-                "Credit": st.column_config.NumberColumn("Credit (₹)", format="%.2f"),
+                "Debit": st.column_config.NumberColumn("Amount (₹)", format="%.2f"),
+                "Credit": st.column_config.NumberColumn("Amount (₹)", format="%.2f"),
             },
             disabled=["Date", "Description"],
             use_container_width=True,
-            key=f"{key_prefix}_editor"
+            key=key
         )
         if not edited.equals(df_to_edit):
             st.session_state.main_df.update(edited)
             st.rerun()
 
     with tab_deb:
-        st.markdown("### 💸 Outflow Analysis")
-        render_editor(st.session_state.main_df[st.session_state.main_df['Debit'] > 0].drop(columns=['Credit']), "deb_tab")
+        render_pro_editor(st.session_state.main_df[st.session_state.main_df['Debit'] > 0].drop(columns=['Credit']), "deb_v3")
 
     with tab_cre:
-        st.markdown("### 💰 Inflow Analysis")
-        render_editor(st.session_state.main_df[st.session_state.main_df['Credit'] > 0].drop(columns=['Debit']), "cre_tab")
+        render_pro_editor(st.session_state.main_df[st.session_state.main_df['Credit'] > 0].drop(columns=['Debit']), "cre_v3")
 
     with tab_sum:
-        st.subheader("Category-Wise Drill Down")
+        st.markdown("### 🔍 Category Inspector")
+        cats = sorted(st.session_state.main_df['Category'].unique())
         
-        categories = sorted(st.session_state.main_df['Category'].unique())
-        
-        for cat in categories:
-            cat_df = st.session_state.main_df[st.session_state.main_df['Category'] == cat]
-            total_spent = cat_df['Debit'].sum()
-            total_earned = cat_df['Credit'].sum()
+        for c in cats:
+            c_df = st.session_state.main_df[st.session_state.main_df['Category'] == c]
+            out_val, in_val = c_df['Debit'].sum(), c_df['Credit'].sum()
             
-            # Colour Logic for Expander Headers
-            header_color = "#d63031" if cat == "Action Required" else "#6c5ce7"
+            # Dynamic Label with Emoji
+            icon = "⚠️" if c == "Action Required" else "📁"
+            label = f"{icon} {c} | Count: {len(c_df)} | Total: ₹{(out_val + in_val):,.2f}"
             
-            label = f"{cat} — ({len(cat_df)} Items) | Out: ₹{total_spent:,.2f} | In: ₹{total_earned:,.2f}"
-            
-            with st.expander(label, expanded=(cat == "Action Required")):
-                st.markdown(f"<span style='color:{header_color}; font-weight:bold;'>Managing: {cat}</span>", unsafe_allow_html=True)
-                render_editor(cat_df, f"sum_{cat}")
-
-        # Summary Metrics with Background Colors
-        st.divider()
-        action_count = len(st.session_state.main_df[st.session_state.main_df['Category'] == "Action Required"])
-        
-        m1, m2, m3 = st.columns(3)
-        with m1:
-            st.metric("Total Expenses", f"₹{st.session_state.main_df['Debit'].sum():,.2f}")
-        with m2:
-            st.metric("Total Income", f"₹{st.session_state.main_df['Credit'].sum():,.2f}")
-        with m3:
-            st.metric("Pending Review", action_count, delta="Action Needed" if action_count > 0 else "Clean", delta_color="inverse")
+            with st.expander(label):
+                render_pro_editor(c_df, f"drill_{c}")
 
 else:
-    st.info("Upload your bank statement and click 'Start Smart Audit' to begin.")
+    st.info("👋 Welcome Rahul! Upload your bank statement in the sidebar to begin your Project MONEYMENTOR session.")

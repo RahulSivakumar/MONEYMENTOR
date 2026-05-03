@@ -73,59 +73,65 @@ with st.sidebar:
             if mapping:
                 st.session_state.main_df = process_data(df_raw, mapping)
             else:
-                st.info("Manual mapping required for this bank.")
+                st.info("Manual mapping required.")
         except Exception as e:
             st.error(f"Analysis Error: {e}")
 
-    st.divider()
-    st.info("Local Processing: On")
-
-# --- 4. THE EDITABLE ENGINE (CONTROLS) ---
+# --- 4. INTEGRATED EDITING TABS ---
 if st.session_state.main_df is not None:
     st.markdown("---")
-    st.subheader("📝 Review & Edit Transactions")
-    st.caption("You can manually edit **Category**, **Debit**, and **Credit** values directly in the table below.")
-
-    # Data Editor allows syncing manual changes back to session_state
-    st.session_state.main_df = st.data_editor(
-        st.session_state.main_df,
-        column_config={
-            "Category": st.column_config.SelectboxColumn(
-                "Category",
-                options=["Market & Wealth", "Food & Lifestyle", "Shopping", "Utilities", "Salary & Income", "Action Required"],
-                required=True,
-            ),
-            "Debit": st.column_config.NumberColumn("Debit (₹)", format="%.2f", min_value=0.0),
-            "Credit": st.column_config.NumberColumn("Credit (₹)", format="%.2f", min_value=0.0),
-        },
-        # Date and Description are kept locked to preserve the original audit trail
-        disabled=["Date", "Description"],
-        use_container_width=True,
-        key="editor_v2"
-    )
-
-    # --- 5. DYNAMIC ANALYSIS ---
-    tab_deb, tab_cre = st.tabs(["🔴 DEBIT AUDIT", "🟢 CREDIT AUDIT"])
     
-    # We pull from the edited state for the final view
-    current_df = st.session_state.main_df
+    tab_deb, tab_cre = st.tabs(["🔴 DEBIT AUDIT & CATEGORIZE", "🟢 CREDIT AUDIT & CATEGORIZE"])
+    
+    # Common Column Config for both editors
+    col_config = {
+        "Category": st.column_config.SelectboxColumn(
+            "Category",
+            options=["Market & Wealth", "Food & Lifestyle", "Shopping", "Utilities", "Salary & Income", "Action Required"],
+            required=True,
+        ),
+        "Debit": st.column_config.NumberColumn("Debit (₹)", format="%.2f", min_value=0.0),
+        "Credit": st.column_config.NumberColumn("Credit (₹)", format="%.2f", min_value=0.0),
+    }
 
     with tab_deb:
-        debits = current_df[current_df['Debit'] > 0].copy()
-        st.metric("Total Expenses", f"₹{debits['Debit'].sum():,.2f}")
-        st.dataframe(
-            debits.style.background_gradient(subset=['Debit'], cmap='Reds')
-            .format({'Debit': '₹{:,.2f}', 'Credit': '₹{:,.2f}'}),
-            use_container_width=True
+        # Filter for debits only
+        debits_only = st.session_state.main_df[st.session_state.main_df['Debit'] > 0].copy()
+        
+        st.metric("Total Expenses", f"₹{debits_only['Debit'].sum():,.2f}")
+        
+        # Edit directly in the tab
+        edited_debits = st.data_editor(
+            debits_only,
+            column_config=col_config,
+            disabled=["Date", "Description"],
+            use_container_width=True,
+            key="debit_editor"
         )
         
+        # Update main state if changes made in this tab
+        if not edited_debits.equals(debits_only):
+            st.session_state.main_df.update(edited_debits)
+            st.rerun()
+
     with tab_cre:
-        credits = current_df[current_df['Credit'] > 0].copy()
-        st.metric("Total Income", f"₹{credits['Credit'].sum():,.2f}")
-        st.dataframe(
-            credits.style.background_gradient(subset=['Credit'], cmap='Greens')
-            .format({'Debit': '₹{:,.2f}', 'Credit': '₹{:,.2f}'}),
-            use_container_width=True
+        # Filter for credits only
+        credits_only = st.session_state.main_df[st.session_state.main_df['Credit'] > 0].copy()
+        
+        st.metric("Total Income", f"₹{credits_only['Credit'].sum():,.2f}")
+        
+        # Edit directly in the tab
+        edited_credits = st.data_editor(
+            credits_only,
+            column_config=col_config,
+            disabled=["Date", "Description"],
+            use_container_width=True,
+            key="credit_editor"
         )
+        
+        # Update main state if changes made in this tab
+        if not edited_credits.equals(credits_only):
+            st.session_state.main_df.update(edited_credits)
+            st.rerun()
 else:
     st.info("Upload your bank statement and click 'Start Smart Audit' to begin.")

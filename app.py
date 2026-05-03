@@ -8,7 +8,6 @@ import os
 try:
     import matplotlib
 except ImportError:
-    st.warning("⚠️ Visual styling library not detected. Attempting auto-fix...")
     os.system(f"{sys.executable} -m pip install matplotlib")
     st.rerun()
 
@@ -52,7 +51,6 @@ def process_data(df, mapping):
 
 # --- 3. UI LAYOUT & SESSION STATE ---
 st.title("🏦 MoneyMentor: Professional Edition")
-st.markdown("### Secure Bank Statement Auditor")
 
 if 'main_df' not in st.session_state:
     st.session_state.main_df = None
@@ -60,7 +58,7 @@ if 'main_df' not in st.session_state:
 with st.sidebar:
     st.header("Project Setup")
     bank_choice = st.selectbox("Select Bank Template", list(BANK_TEMPLATES.keys()))
-    uploaded_file = st.file_uploader("Upload Statement (Excel/CSV)", type=['csv', 'xlsx'])
+    uploaded_file = st.file_uploader("Upload Statement", type=['csv', 'xlsx'])
     
     if st.button("⚡ Start Smart Audit") and uploaded_file:
         try:
@@ -79,59 +77,85 @@ with st.sidebar:
 
 # --- 4. INTEGRATED EDITING TABS ---
 if st.session_state.main_df is not None:
-    st.markdown("---")
     
-    tab_deb, tab_cre = st.tabs(["🔴 DEBIT AUDIT & CATEGORIZE", "🟢 CREDIT AUDIT & CATEGORIZE"])
+    tab_deb, tab_cre, tab_sum = st.tabs([
+        "🔴 DEBIT AUDIT", 
+        "🟢 CREDIT AUDIT", 
+        "📊 AUDIT SUMMARY"
+    ])
     
-    # Common Column Config for both editors
-    col_config = {
-        "Category": st.column_config.SelectboxColumn(
-            "Category",
-            options=["Market & Wealth", "Food & Lifestyle", "Shopping", "Utilities", "Salary & Income", "Action Required"],
-            required=True,
-        ),
-        "Debit": st.column_config.NumberColumn("Debit (₹)", format="%.2f", min_value=0.0),
-        "Credit": st.column_config.NumberColumn("Credit (₹)", format="%.2f", min_value=0.0),
-    }
-
     with tab_deb:
-        # Filter for debits only
-        debits_only = st.session_state.main_df[st.session_state.main_df['Debit'] > 0].copy()
+        # Hide Credit column for cleaner Debit UI
+        debits_only = st.session_state.main_df[st.session_state.main_df['Debit'] > 0].drop(columns=['Credit']).copy()
         
-        st.metric("Total Expenses", f"₹{debits_only['Debit'].sum():,.2f}")
-        
-        # Edit directly in the tab
+        col1, col2 = st.columns([2, 1])
+        col1.metric("Total Expenses", f"₹{debits_only['Debit'].sum():,.2f}")
+        col2.info("💡 High-value transactions are highlighted in red.")
+
+        # Styling: High values (> 5000) get a light red background
+        def highlight_high_debits(s):
+            return ['background-color: #ffcccc' if (isinstance(v, float) and v > 5000) else '' for v in s]
+
         edited_debits = st.data_editor(
             debits_only,
-            column_config=col_config,
+            column_config={
+                "Category": st.column_config.SelectboxColumn("Category", options=["Market & Wealth", "Food & Lifestyle", "Shopping", "Utilities", "Salary & Income", "Action Required"], required=True),
+                "Debit": st.column_config.NumberColumn("Debit (₹)", format="%.2f", min_value=0.0),
+            },
             disabled=["Date", "Description"],
             use_container_width=True,
             key="debit_editor"
         )
         
-        # Update main state if changes made in this tab
         if not edited_debits.equals(debits_only):
+            # Sync back to main_df while maintaining the Credit column
             st.session_state.main_df.update(edited_debits)
             st.rerun()
 
     with tab_cre:
-        # Filter for credits only
-        credits_only = st.session_state.main_df[st.session_state.main_df['Credit'] > 0].copy()
+        # Hide Debit column for cleaner Credit UI
+        credits_only = st.session_state.main_df[st.session_state.main_df['Credit'] > 0].drop(columns=['Debit']).copy()
         
         st.metric("Total Income", f"₹{credits_only['Credit'].sum():,.2f}")
         
-        # Edit directly in the tab
         edited_credits = st.data_editor(
             credits_only,
-            column_config=col_config,
+            column_config={
+                "Category": st.column_config.SelectboxColumn("Category", options=["Market & Wealth", "Food & Lifestyle", "Shopping", "Utilities", "Salary & Income", "Action Required"], required=True),
+                "Credit": st.column_config.NumberColumn("Credit (₹)", format="%.2f", min_value=0.0),
+            },
             disabled=["Date", "Description"],
             use_container_width=True,
             key="credit_editor"
         )
         
-        # Update main state if changes made in this tab
         if not edited_credits.equals(credits_only):
             st.session_state.main_df.update(edited_credits)
             st.rerun()
+
+    with tab_sum:
+        st.subheader("Financial Breakdown")
+        summary_df = st.session_state.main_df.groupby('Category').agg({
+            'Debit': 'sum',
+            'Credit': 'sum',
+            'Description': 'count'
+        }).rename(columns={'Description': 'Count'})
+        
+        summary_df['Net Impact'] = summary_df['Credit'] - summary_df['Debit']
+        
+        # Action Required Metric
+        action_count = summary_df.loc["Action Required", "Count"] if "Action Required" in summary_df.index else 0
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Line Items", len(st.session_state.main_df))
+        c2.metric("Items Pending Review", int(action_count), delta=None, delta_color="inverse")
+        if action_count > 0:
+            c2.warning(f"⚠️ You have {int(action_count)} items labeled 'Action Required'.")
+        else:
+            c2.success("✅ All items categorized!")
+        c3.metric("Net Flow", f"₹{(st.session_state.main_df['Credit'].sum() - st.session_state.main_df['Debit'].sum()):,.2f}")
+
+        st.table(summary_df.style.format({'Debit': '₹{:,.2f}', 'Credit': '₹{:,.2f}', 'Net Impact': '₹{:,.2f}'}))
+
 else:
     st.info("Upload your bank statement and click 'Start Smart Audit' to begin.")

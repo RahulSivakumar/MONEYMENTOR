@@ -100,20 +100,25 @@ BANK_TEMPLATES = {
 
 def process_data(df, mapping):
     std = pd.DataFrame()
+    
+    # 1. Standardize core columns
     std['Date'] = df[mapping['date']]
     std['Description'] = df[mapping['description']]
     
-    # Extract Balance column for reverse calculation
+    # 2. Extract Balance column (CRITICAL FOR OPENING BALANCE)
     if 'balance' in mapping and mapping['balance'] in df.columns:
-        std['RunningBalance'] = df[mapping['balance']].replace('[₹, ]', '', regex=True).fillna(0).astype(float)
+        # Clean symbols like ₹ and commas, then convert to float
+        std['RunningBalance'] = df[mapping['balance']].astype(str).replace('[₹, ]', '', regex=True).fillna(0).astype(float)
     
+    # 3. Standardize amounts
     for col in ['Debit', 'Credit']:
-        std[col] = df[mapping[col.lower()]].replace('[₹, ]', '', regex=True).fillna(0).astype(float)
+        std[col] = df[mapping[col.lower()]].astype(str).replace('[₹, ]', '', regex=True).fillna(0).astype(float)
     
+    # 4. Final cleaning
     std = std.drop_duplicates()
     std['Category'] = std['Description'].apply(master_categorizer)
+    
     return std
-
 def master_categorizer(description):
     desc = str(description).lower()
     rules = {
@@ -128,15 +133,6 @@ def master_categorizer(description):
             return category
     return "Action Required"
 
-def process_data(df, mapping):
-    std = pd.DataFrame()
-    std['Date'] = df[mapping['date']]
-    std['Description'] = df[mapping['description']]
-    for col in ['Debit', 'Credit']:
-        std[col] = df[mapping[col.lower()]].replace('[₹, ]', '', regex=True).fillna(0).astype(float)
-    std = std.drop_duplicates()
-    std['Category'] = std['Description'].apply(master_categorizer)
-    return std
 
 # --- 3. DASHBOARD HEADER (Updated with Thunder Sign) ---
 st.markdown("""

@@ -93,10 +93,26 @@ st.markdown("""
 
 # --- 2. LOGIC ENGINE ---
 BANK_TEMPLATES = {
-    "HDFC Bank": {"description": "Narration", "debit": "Withdrawal Amt.", "credit": "Deposit Amt.", "date": "Date"},
-    "ICICI Bank": {"description": "Description", "debit": "Debit", "credit": "Credit", "date": "Value Date"},
-    "SBI (State Bank)": {"description": "Description", "debit": "Debit", "credit": "Credit", "date": "Date"},
+    "HDFC Bank": {"description": "Narration", "debit": "Withdrawal Amt.", "credit": "Deposit Amt.", "date": "Date", "balance": "Closing Balance"},
+    "ICICI Bank": {"description": "Description", "debit": "Debit", "credit": "Credit", "date": "Value Date", "balance": "Balance (INR)"},
+    "SBI (State Bank)": {"description": "Description", "debit": "Debit", "credit": "Credit", "date": "Date", "balance": "Balance"},
 }
+
+def process_data(df, mapping):
+    std = pd.DataFrame()
+    std['Date'] = df[mapping['date']]
+    std['Description'] = df[mapping['description']]
+    
+    # Extract Balance column for reverse calculation
+    if 'balance' in mapping and mapping['balance'] in df.columns:
+        std['RunningBalance'] = df[mapping['balance']].replace('[₹, ]', '', regex=True).fillna(0).astype(float)
+    
+    for col in ['Debit', 'Credit']:
+        std[col] = df[mapping[col.lower()]].replace('[₹, ]', '', regex=True).fillna(0).astype(float)
+    
+    std = std.drop_duplicates()
+    std['Category'] = std['Description'].apply(master_categorizer)
+    return std
 
 def master_categorizer(description):
     desc = str(description).lower()
@@ -151,6 +167,24 @@ with st.sidebar:
 
 # --- 4. THE PRO WORKFLOW ---
 if 'main_df' in st.session_state and st.session_state.main_df is not None:
+
+# NEW: Reverse Calculation Logic
+    opening_balance = 0.0
+    if 'RunningBalance' in st.session_state.main_df.columns:
+        first_row = st.session_state.main_df.iloc[0]
+        opening_balance = first_row['RunningBalance'] - first_row['Credit'] + first_row['Debit']
+
+    total_out = st.session_state.main_df['Debit'].sum()
+    total_in = st.session_state.main_df['Credit'].sum()
+    current_balance = opening_balance + total_in - total_out # Final calculated balance
+
+# NEW: Opening Balance UI Card
+    st.markdown(f"""
+        <div style="background: #1a1a1a; padding: 15px; border-radius: 10px; border-left: 5px solid #FFD700; margin-bottom: 20px; border-top: 1px solid #333; border-right: 1px solid #333; border-bottom: 1px solid #333;">
+            <span style="color: #888; text-transform: uppercase; font-size: 0.8rem; letter-spacing:1px;">Calculated Opening Balance</span><br>
+            <span style="color: #FFD700; font-size: 1.8rem; font-weight: bold;">₹{opening_balance:,.2f}</span>
+        </div>
+    """, unsafe_allow_html=True)
     
     # Global Metrics Row
     m1, m2, m3, m4 = st.columns(4)
@@ -160,7 +194,8 @@ if 'main_df' in st.session_state and st.session_state.main_df is not None:
     
     m1.metric("Total Expenses", f"₹{total_out:,.2f}", delta_color="inverse")
     m2.metric("Total Income", f"₹{total_in:,.2f}")
-    m3.metric("Net Savings", f"₹{(total_in - total_out):,.2f}")
+    # UPDATED: m3 now shows the Final Balance instead of Net Savings
+    m3.metric("Final Balance", f"₹{current_balance:,.2f}", delta=f"₹{total_in - total_out:,.2f}")
     m4.metric("Pending Review", pending, delta="Action Required" if pending > 0 else "Ready", delta_color="inverse")
 
     st.write("##") # Spacer

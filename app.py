@@ -4,59 +4,92 @@ import numpy as np
 import sys
 import os
 
-# --- 1. THEME & ADVANCED CSS INJECTION ---
-st.set_page_config(page_title="MoneyMentor Pro", layout="wide", page_icon="🏦")
+# --- 1. THEME & ADVANCED CSS INJECTION (Updated for Black & Yellow Thunder) ---
+st.set_page_config(page_title="MoneyMentor Pro", layout="wide", page_icon="⚡")
 
 st.markdown("""
     <style>
     /* Global Background and Fonts */
     .stApp {
-        background-color: #f8f9fc;
+        background-color: #0a0a0a;
+        color: #FFD700;
     }
     
-    /* Modern Sidebar */
+    /* Modern Sidebar - Darker with Yellow Accent */
     [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #6c5ce7 0%, #a29bfe 100%);
-        color: white;
+        background: #111111;
+        border-right: 1px solid #FFD700;
     }
-    [data-testid="stSidebar"] .stMarkdown p {
-        color: white;
+    [data-testid="stSidebar"] .stMarkdown p, [data-testid="stSidebar"] label {
+        color: #FFD700 !important;
     }
     
-    /* Glowing Dashboard Header */
+    /* Thunder Dashboard Header */
     .dashboard-title {
-        background: #ffffff;
-        padding: 20px;
+        background: #1a1a1a;
+        padding: 25px;
         border-radius: 15px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.05);
-        border-left: 10px solid #6c5ce7;
+        box-shadow: 0 0 20px rgba(255, 215, 0, 0.1);
+        border-bottom: 4px solid #FFD700;
         margin-bottom: 25px;
+        text-align: center;
+    }
+
+    /* Thunder Icon Animation */
+    .thunder-bolt {
+        filter: drop-shadow(0 0 10px #FFD700);
+        margin: 10px 0;
     }
     
-    /* Category Cards */
-    .cat-card {
+    /* Metric Card Customization - Black with Yellow Text */
+    [data-testid="stMetric"] {
+        background: #1a1a1a !important;
         padding: 15px;
-        border-radius: 10px;
-        background: white;
-        border: 1px solid #e1e4e8;
-        margin-bottom: 10px;
+        border-radius: 12px;
+        border: 1px solid #333;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+    }
+    [data-testid="stMetricValue"] > div {
+        color: #FFD700 !important;
+        font-weight: 800 !important;
+    }
+    [data-testid="stMetricLabel"] p {
+        color: #ffffff !important;
+        text-transform: uppercase;
+        letter-spacing: 1px;
     }
 
     /* Tab Styling */
-    .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {
-        font-size: 18px;
-        font-weight: 600;
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 10px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        background-color: #1a1a1a;
+        border: 1px solid #333;
+        border-radius: 5px;
+        color: white !important;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #FFD700 !important;
+        color: black !important;
+    }
+
+    /* Data Editor / Table Styling */
+    .stDataEditor {
+        background-color: #1a1a1a;
+        border-radius: 10px;
     }
     
-    /* Metric Card Customization */
-    [data-testid="stMetric"] {
-        background: white;
-        padding: 15px;
-        border-radius: 12px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.03);
+    /* Success/Info Messages */
+    .stAlert {
+        background-color: #1a1a1a !important;
+        color: #FFD700 !important;
+        border: 1px solid #FFD700 !important;
     }
     </style>
     """, unsafe_allow_html=True)
+
+# ... [Keep your BANK_TEMPLATES and logic functions as they are] ...
 
 # --- 2. LOGIC ENGINE ---
 BANK_TEMPLATES = {
@@ -89,25 +122,22 @@ def process_data(df, mapping):
     std['Category'] = std['Description'].apply(master_categorizer)
     return std
 
-# --- 3. DASHBOARD HEADER ---
+# --- 3. DASHBOARD HEADER (Updated with Thunder Sign) ---
 st.markdown("""
     <div class="dashboard-title">
-        <h1 style='margin:0; color:#2d3436;'>🏦 MoneyMentor <span style='color:#6c5ce7;'>Pro</span></h1>
-        <p style='margin:0; color:#636e72;'>Intelligent Financial Auditor & Investment Tracker</p>
+        <h1 style='margin:0; color:#FFFFFF; font-size: 3rem;'>
+            🏦 MoneyMentor <span style='color:#FFD700;'>Pro</span>
+        </h1>
+        <div class="thunder-bolt">
+            <svg width="50" height="50" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M13 2L3 14H12L11 22L21 10H12L13 2Z" fill="#FFD700" stroke="#FFD700" stroke-width="1" stroke-linejoin="round"/>
+            </svg>
+        </div>
+        <p style='margin:0; color:#888; font-style: italic; letter-spacing: 2px;'>
+            INTELLIGENT FINANCIAL AUDITOR & INVESTMENT TRACKER
+        </p>
     </div>
     """, unsafe_allow_html=True)
-
-if 'main_df' not in st.session_state:
-    st.session_state.main_df = None
-
-with st.sidebar:
-    st.markdown("### 🛠️ Workspace Controls")
-    bank = st.selectbox("Select Institution", list(BANK_TEMPLATES.keys()))
-    file = st.file_uploader("Drop Statement Here", type=['csv', 'xlsx'])
-    
-    if st.button("🚀 Run Smart Audit") and file:
-        df_raw = pd.read_csv(file) if file.name.endswith('.csv') else pd.read_excel(file)
-        st.session_state.main_df = process_data(df_raw, BANK_TEMPLATES[bank])
 
 # --- 4. THE PRO WORKFLOW ---
 if st.session_state.main_df is not None:

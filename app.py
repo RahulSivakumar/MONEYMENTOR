@@ -195,4 +195,8 @@ if 'main_df' in st.session_state and st.session_state.main_df is not None:
                 render_pro_editor(c_df, f"drill_{c}")
 
 else:
-    st.info("👋 Welcome Rahul! Upload your bank statement in the sidebar to begin your Project MONEYMENTOR session.")
+    st.markdown("""
+    <div style="background: #1a1a1a; padding: 20px; border-radius: 10px; border: 1px solid #FFD700; color: #FFD700; text-align: center;">
+        👋 Welcome <b>Rahul</b>! Upload your bank statement in the sidebar to spark your <b>MoneyMentor</b> session. ⚡
+    </div>
+""", unsafe_allow_html=True)

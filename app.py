@@ -140,7 +140,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- 4. THE PRO WORKFLOW ---
-if st.session_state.main_df is not None:
+if 'main_df' in st.session_state and st.session_state.main_df is not None:
     
     # Global Metrics Row
     m1, m2, m3, m4 = st.columns(4)

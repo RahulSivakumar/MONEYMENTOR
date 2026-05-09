@@ -59,6 +59,24 @@ st.markdown("""
         letter-spacing: 1px;
     }
 
+/* Style the Debit column header red */
+[data-testid="stTable"] th:nth-child(3) {
+    color: #FF4D4D !important;
+}
+
+/* Style the Credit column header green */
+[data-testid="stTable"] th:nth-child(4) {
+    color: #00FF88 !important;
+}
+
+/* Make Action Required categories glow so they stand out */
+div[data-testid="stExpander"] p:contains("Action Required") {
+    color: #FF4D4D !important;
+    font-weight: bold;
+    text-shadow: 0 0 5px rgba(255, 77, 77, 0.5);
+}
+
+
     /* Tab Styling */
     .stTabs [data-baseweb="tab-list"] {
         gap: 10px;
@@ -89,24 +107,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-/* Add this inside your existing <style> tag */
 
-/* Style the Debit column header red */
-[data-testid="stTable"] th:nth-child(3) {
-    color: #FF4D4D !important;
-}
-
-/* Style the Credit column header green */
-[data-testid="stTable"] th:nth-child(4) {
-    color: #00FF88 !important;
-}
-
-/* Make Action Required categories glow so they stand out */
-div[data-testid="stExpander"] p:contains("Action Required") {
-    color: #FF4D4D !important;
-    font-weight: bold;
-    text-shadow: 0 0 5px rgba(255, 77, 77, 0.5);
-}
 
 # ... [Keep your BANK_TEMPLATES and logic functions as they are] ...
 

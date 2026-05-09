@@ -139,6 +139,16 @@ st.markdown("""
     </div>
     """, unsafe_allow_html=True)
 
+# --- SIDEBAR CONTROLS (MISSING CODE) ---
+with st.sidebar:
+    st.markdown("### 🛠️ Workspace Controls")
+    bank = st.selectbox("Select Institution", list(BANK_TEMPLATES.keys()))
+    file = st.file_uploader("Drop Statement Here", type=['csv', 'xlsx'])
+    
+    if st.button("🚀 Run Smart Audit") and file:
+        df_raw = pd.read_csv(file) if file.name.endswith('.csv') else pd.read_excel(file)
+        st.session_state.main_df = process_data(df_raw, BANK_TEMPLATES[bank])
+
 # --- 4. THE PRO WORKFLOW ---
 if 'main_df' in st.session_state and st.session_state.main_df is not None:
     

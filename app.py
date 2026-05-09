@@ -5,7 +5,7 @@ import sys
 import os
 
 # --- 1. THEME & ADVANCED CSS INJECTION (Updated for Black & Yellow Thunder) ---
-st.set_page_config(page_title="MoneyMentor Pro", layout="wide", page_icon="⚡")
+st.set_page_config(page_title="MoneyMentor Pro", layout="wide", page_icon="⚡",initial_sidebar_state="expanded")
 
 st.markdown("""
     <style>

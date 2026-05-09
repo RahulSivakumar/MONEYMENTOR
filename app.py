@@ -219,7 +219,6 @@ if 'main_df' in st.session_state and st.session_state.main_df is not None:
     tab_deb, tab_cre, tab_sum = st.tabs(["🔴 Expenses", "🟢 Income", "📊 Master Drill-Down"])
     
     def render_pro_editor(df_to_edit, key):
-    # Determine if we are looking at Expenses or Income based on the key
     is_expense_tab = "deb" in key 
     
     edited = st.data_editor(

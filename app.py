@@ -89,6 +89,25 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
+/* Add this inside your existing <style> tag */
+
+/* Style the Debit column header red */
+[data-testid="stTable"] th:nth-child(3) {
+    color: #FF4D4D !important;
+}
+
+/* Style the Credit column header green */
+[data-testid="stTable"] th:nth-child(4) {
+    color: #00FF88 !important;
+}
+
+/* Make Action Required categories glow so they stand out */
+div[data-testid="stExpander"] p:contains("Action Required") {
+    color: #FF4D4D !important;
+    font-weight: bold;
+    text-shadow: 0 0 5px rgba(255, 77, 77, 0.5);
+}
+
 # ... [Keep your BANK_TEMPLATES and logic functions as they are] ...
 
 # --- 2. LOGIC ENGINE ---
@@ -199,20 +218,40 @@ if 'main_df' in st.session_state and st.session_state.main_df is not None:
     tab_deb, tab_cre, tab_sum = st.tabs(["🔴 Expenses", "🟢 Income", "📊 Master Drill-Down"])
     
     def render_pro_editor(df_to_edit, key):
-        edited = st.data_editor(
-            df_to_edit,
-            column_config={
-                "Category": st.column_config.SelectboxColumn("Category", options=["Market & Wealth", "Food & Lifestyle", "Shopping", "Utilities", "Salary & Income", "Action Required"], required=True),
-                "Debit": st.column_config.NumberColumn("Amount (₹)", format="%.2f"),
-                "Credit": st.column_config.NumberColumn("Amount (₹)", format="%.2f"),
-            },
-            disabled=["Date", "Description"],
-            use_container_width=True,
-            key=key
-        )
-        if not edited.equals(df_to_edit):
-            st.session_state.main_df.update(edited)
-            st.rerun()
+    # Determine if we are looking at Expenses or Income based on the key
+    is_expense_tab = "deb" in key 
+    
+    edited = st.data_editor(
+        df_to_edit,
+        column_config={
+            "Category": st.column_config.SelectboxColumn(
+                "Category", 
+                options=["Market & Wealth", "Food & Lifestyle", "Shopping", "Utilities", "Salary & Income", "Action Required"], 
+                required=True
+            ),
+            "Debit": st.column_config.NumberColumn(
+                "📉 Amount (Debit)", 
+                format="₹%.2f",
+                help="Money leaving your account",
+                # Red text for debits
+                label="Debit (Out)",
+            ),
+            "Credit": st.column_config.NumberColumn(
+                "📈 Amount (Credit)", 
+                format="₹%.2f",
+                help="Money entering your account",
+                # Green text for credits
+                label="Credit (In)",
+            ),
+        },
+        disabled=["Date", "Description", "RunningBalance"],
+        use_container_width=True,
+        key=key
+    )
+    
+    if not edited.equals(df_to_edit):
+        st.session_state.main_df.update(edited)
+        st.rerun()
 
     with tab_deb:
         render_pro_editor(st.session_state.main_df[st.session_state.main_df['Debit'] > 0].drop(columns=['Credit']), "deb_v3")

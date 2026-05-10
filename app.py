@@ -17,36 +17,39 @@ st.markdown("""
     [data-testid="stMetric"] { background: #1a1a1a !important; padding: 15px; border-radius: 12px; border: 1px solid #333; }
     [data-testid="stMetricValue"] > div { color: #FFD700 !important; }
     
-    /* Matching Opening Balance UI to Metrics */
+    /* Opening Balance UI Matching Metrics */
     .balance-card {
         background: #1a1a1a;
         padding: 15px;
         border-radius: 12px;
         border: 1px solid #333;
         height: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
     }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. ENHANCED LOGIC ENGINE ---
-PRIMARY_CATS = ["Expenses", "Income", "Investment", "Savings"]
-SUB_CATS = [
-    "Food", "Fuel", "House exp", "Personal", "Misc",  # Expenses
-    "Salary", "Other Credits", "Investment Returns", "House",  # Income
-    "Mutual Funds", "Stock", "FNO", "Gold", "ETF",  # Investment
-    "Salary Amt", "Extra income",  # Savings
-    "Uncategorized"
-]
+# --- 2. LOGIC ENGINE & CATEGORY DEFINITIONS ---
+# Pre-defined mapping of Sub-Categories per Primary Category
+SUB_CAT_MAP = {
+    "Expenses": ["Food", "Fuel", "House exp", "Personal", "Misc"],
+    "Income": ["Salary", "Other Credits", "Investment Returns", "House"],
+    "Investment": ["Mutual Funds", "Stock", "FNO", "Gold", "ETF"],
+    "Savings": ["Salary Amt", "Extra income"],
+    "Action Required": ["Uncategorized"]
+}
+
+# Flattened list for the Master Editor
+ALL_SUB_CATS = [item for sublist in SUB_CAT_MAP.values() for item in sublist]
 
 if 'rules' not in st.session_state:
     st.session_state.rules = {
         "zomato": ["Expenses", "Food"], "swiggy": ["Expenses", "Food"],
         "hpcl": ["Expenses", "Fuel"], "bpcl": ["Expenses", "Fuel"],
-        "rent": ["Expenses", "House exp"],
-        "salary": ["Income", "Salary"],
-        "nifty bees": ["Investment", "ETF"], "it bees": ["Investment", "ETF"],
-        "zerodha": ["Investment", "Stock"], "fno": ["Investment", "FNO"],
-        "gold": ["Investment", "Gold"]
+        "salary": ["Income", "Salary"], "nifty bees": ["Investment", "ETF"],
+        "it bees": ["Investment", "ETF"], "zerodha": ["Investment", "Stock"]
     }
 
 def tiered_categorizer(description):
@@ -62,18 +65,16 @@ def process_data(df, mapping):
     std['Description'] = df[mapping['description']]
     
     if 'balance' in mapping and mapping['balance'] in df.columns:
-        std['RunningBalance'] = df[mapping['balance']].astype(str).replace('[₹, ]', '', regex=True)
-        std['RunningBalance'] = pd.to_numeric(std['RunningBalance'], errors='coerce').fillna(0.0)
+        std['RunningBalance'] = pd.to_numeric(df[mapping['balance']].astype(str).replace('[₹, ]', '', regex=True), errors='coerce').fillna(0.0)
 
     for col in ['Debit', 'Credit']:
-        std[col] = df[mapping[col.lower()]].astype(str).replace('[₹, ]', '', regex=True)
-        std[col] = pd.to_numeric(std[col], errors='coerce').fillna(0.0)
+        std[col] = pd.to_numeric(df[mapping[col.lower()]].astype(str).replace('[₹, ]', '', regex=True), errors='coerce').fillna(0.0)
     
     res = std['Description'].apply(tiered_categorizer)
     std['Primary'], std['Sub-Category'] = zip(*res)
     return std
 
-# --- 3. SIDEBAR ---
+# --- 3. SIDEBAR: WORKSPACE & RULE MANAGEMENT ---
 with st.sidebar:
     st.markdown("### 🛠️ Workspace Controls")
     bank_choice = st.selectbox("Institution", ["HDFC Bank", "ICICI Bank", "SBI"])
@@ -93,8 +94,13 @@ with st.sidebar:
     st.divider()
     st.markdown("### ➕ Add Custom Rule")
     new_kw = st.text_input("Keyword")
-    new_pri = st.selectbox("Primary Category", PRIMARY_CATS)
-    new_sub = st.selectbox("Sub-Category", SUB_CATS)
+    
+    # Allow user to type a new category or select existing
+    existing_primaries = list(SUB_CAT_MAP.keys())
+    new_pri = st.selectbox("Primary Category", existing_primaries)
+    
+    # Filtered sub-categories in sidebar
+    new_sub = st.selectbox("Sub-Category", SUB_CAT_MAP.get(new_pri, ["Uncategorized"]))
     
     if st.button("Save & Apply Rule"):
         if new_kw:
@@ -110,9 +116,8 @@ st.markdown("""<div class="dashboard-title"><h1>🏦 MoneyMentor <span style='co
 if 'main_df' in st.session_state:
     df = st.session_state.main_df
     
-    # Balance Logic
-    total_out = df['Debit'].sum()
-    total_in = df['Credit'].sum()
+    # Balance Calculations
+    total_out, total_in = df['Debit'].sum(), df['Credit'].sum()
     if 'RunningBalance' in df.columns:
         closing_bal = df['RunningBalance'].iloc[-1]
         first_row = df.iloc[0]
@@ -121,12 +126,12 @@ if 'main_df' in st.session_state:
         opening_bal = 0.0
         closing_bal = total_in - total_out
 
-    # Balanced UI Header
+    # opening and closing balance UI
     c_open, c_close = st.columns(2)
     with c_open:
-        st.markdown(f"""<div class="balance-card"><p style="color: #888; margin:0; font-size: 0.8rem;">OPENING BALANCE</p><h2 style="color: #FFF; margin:0;">₹{opening_bal:,.2f}</h2></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="balance-card"><p style="color: #888; margin:0; font-size: 0.8rem; letter-spacing:1px;">OPENING BALANCE</p><h2 style="color: #FFF; margin:0;">₹{opening_bal:,.2f}</h2></div>""", unsafe_allow_html=True)
     with c_close:
-        st.markdown(f"""<div class="balance-card" style="border: 1px solid #FFD700;"><p style="color: #FFD700; margin:0; font-size: 0.8rem;">CLOSING BALANCE</p><h2 style="color: #FFD700; margin:0;">₹{closing_bal:,.2f}</h2></div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="balance-card" style="border: 1px solid #FFD700;"><p style="color: #FFD700; margin:0; font-size: 0.8rem; letter-spacing:1px;">CLOSING BALANCE</p><h2 style="color: #FFD700; margin:0;">₹{closing_bal:,.2f}</h2></div>""", unsafe_allow_html=True)
 
     st.write("") # Spacer
 
@@ -139,28 +144,44 @@ if 'main_df' in st.session_state:
 
     tab1, tab2 = st.tabs(["📝 Master Data Editor", "📊 Advanced Summary"])
 
-    # Config for both tables
-    col_cfg = {
-        "Primary": st.column_config.SelectboxColumn("Primary", options=PRIMARY_CATS + ["Action Required"], required=True),
-        "Sub-Category": st.column_config.SelectboxColumn("Sub-Category", options=SUB_CATS, required=True),
-        "Debit": st.column_config.NumberColumn("Debit", format="₹%.2f"),
-        "Credit": st.column_config.NumberColumn("Credit", format="₹%.2f"),
-    }
+    # Shared Table Configuration
+    def get_cfg(sub_options):
+        return {
+            "Primary": st.column_config.SelectboxColumn("Primary", options=list(SUB_CAT_MAP.keys()), required=True),
+            "Sub-Category": st.column_config.SelectboxColumn("Sub-Category", options=sub_options, required=True),
+            "Debit": st.column_config.NumberColumn("Debit", format="₹%.2f"),
+            "Credit": st.column_config.NumberColumn("Credit", format="₹%.2f"),
+        }
 
     with tab1:
-        edited_df = st.data_editor(df, column_config=col_cfg, disabled=["Date", "Description", "RunningBalance"], use_container_width=True, key="main_editor")
+        st.subheader("Raw Transaction Feed")
+        edited_df = st.data_editor(df, column_config=get_cfg(ALL_SUB_CATS), disabled=["Date", "Description", "RunningBalance"], use_container_width=True, key="main_editor")
         if not edited_df.equals(df):
             st.session_state.main_df = edited_df
             st.rerun()
 
     with tab2:
-        for pri in PRIMARY_CATS + ["Action Required"]:
+        st.subheader("Dynamic Financial Pillars")
+        # DYNAMICALLY generate expanders for whatever categories exist in the data
+        present_categories = sorted(df['Primary'].unique())
+        
+        for pri in present_categories:
             pri_df = df[df['Primary'] == pri]
             total_val = pri_df['Credit'].sum() if pri in ["Income", "Savings"] else pri_df['Debit'].sum()
-            with st.expander(f"{pri.upper()} — Total: ₹{total_val:,.2f}"):
-                sub_edited = st.data_editor(pri_df, column_config=col_cfg, use_container_width=True, key=f"sum_{pri}")
+            
+            with st.expander(f"📂 {pri.upper()} — Total: ₹{total_val:,.2f} ({len(pri_df)} items)"):
+                # FILTERED Sub-categories for this specific pillar
+                current_sub_options = SUB_CAT_MAP.get(pri, ALL_SUB_CATS)
+                
+                sub_edited = st.data_editor(
+                    pri_df, 
+                    column_config=get_cfg(current_sub_options), 
+                    use_container_width=True, 
+                    key=f"dyn_edit_{pri}"
+                )
+                
                 if not sub_edited.equals(pri_df):
                     st.session_state.main_df.update(sub_edited)
                     st.rerun()
 else:
-    st.info("👋 Welcome Rahul! Upload a statement to begin.")
+    st.info("👋 Welcome Rahul! Upload your statement in the sidebar to begin.")

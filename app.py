@@ -78,16 +78,21 @@ with st.sidebar:
 st.markdown("""<div class="dashboard-title"><h1>🏦 MoneyMentor <span style='color:#FFD700;'>Pro</span></h1></div>""", unsafe_allow_html=True)
 
 if 'main_df' in st.session_state:
-    df = st.session_state.main_df
+    # Always work on the session state directly to ensure data persistence
     
     # Balance UI
-    total_out, total_in = df['Debit'].sum(), df['Credit'].sum()
-    closing_bal = df['RunningBalance'].iloc[-1] if 'RunningBalance' in df.columns else total_in - total_out
-    opening_bal = (df['RunningBalance'].iloc[0] - df['Credit'].iloc[0] + df['Debit'].iloc[0]) if 'RunningBalance' in df.columns else 0.0
+    total_out, total_in = st.session_state.main_df['Debit'].sum(), st.session_state.main_df['Credit'].sum()
+    if 'RunningBalance' in st.session_state.main_df.columns:
+        closing_bal = st.session_state.main_df['RunningBalance'].iloc[-1]
+        first_row = st.session_state.main_df.iloc[0]
+        opening_bal = first_row['RunningBalance'] - first_row['Credit'] + first_row['Debit']
+    else:
+        opening_bal = 0.0
+        closing_bal = total_in - total_out
 
     c_open, c_close = st.columns(2)
     with c_open: st.markdown(f"""<div class="balance-card"><p style="color:#888;margin:0;font-size:0.8rem;">OPENING BALANCE</p><h2 style="color:#FFF;margin:0;">₹{opening_bal:,.2f}</h2></div>""", unsafe_allow_html=True)
-    with c_close: st.markdown(f"""<div class="balance-card" style="border:1px solid #FFD700;"><p style="color:#FFD700;margin:0;font-size:0.8rem;">CLOSING BALANCE</p><h2 style="color:#FFD700;margin:0;">₹{closing_bal:,.2f}</h2></div>""", unsafe_allow_html=True)
+    with c_close: st.markdown(f"""<div class="balance-card" style="border: 1px solid #FFD700;"><p style="color:#FFD700;margin:0;font-size:0.8rem;">CLOSING BALANCE</p><h2 style="color:#FFD700;margin:0;">₹{closing_bal:,.2f}</h2></div>""", unsafe_allow_html=True)
 
     tab1, tab2 = st.tabs(["📝 Master Data Editor", "📊 Advanced Summary"])
 
@@ -101,26 +106,26 @@ if 'main_df' in st.session_state:
 
     with tab1:
         st.subheader("Raw Transaction Feed")
-        edited_df = st.data_editor(df, column_config=get_cfg(ALL_SUB_CATS), disabled=["Date", "Description", "RunningBalance"], use_container_width=True, key="main_editor")
-        if not edited_df.equals(df):
+        edited_df = st.data_editor(st.session_state.main_df, column_config=get_cfg(ALL_SUB_CATS), disabled=["Date", "Description", "RunningBalance"], use_container_width=True, key="main_editor")
+        if not edited_df.equals(st.session_state.main_df):
             st.session_state.main_df = edited_df
             st.rerun()
 
     with tab2:
         st.subheader("Dynamic Financial Pillars")
         
-        # Dynamic Folders
+        # Get dynamic categories based on current session state
         present_categories = sorted(st.session_state.main_df['Primary'].unique())
+        
         for pri in present_categories:
             pri_df = st.session_state.main_df[st.session_state.main_df['Primary'] == pri].copy()
             total_val = pri_df['Credit'].sum() if pri in ["Income", "Savings"] else pri_df['Debit'].sum()
             
-            with st.expander(f"📂 {pri.upper()} — Total: ₹{total_val:,.2f}"):
+            with st.expander(f"📂 {pri.upper()} — Total: ₹{total_val:,.2f} ({len(pri_df)} items)"):
                 if pri == "Action Required":
                     st.markdown("### 🤖 Single-Item AI Categorizer")
                     
                     if not pri_df.empty:
-                        # 1. Selection
                         selected_desc = st.selectbox("Select Transaction to Categorize", pri_df['Description'].unique(), key="ai_select_box")
                         
                         col_ai1, col_ai2 = st.columns(2)
@@ -136,8 +141,7 @@ if 'main_df' in st.session_state:
                                 except: st.error("Webhook failed")
 
                         with col_ai2:
-                            # 2. Sync Logic (No Description match needed, just takes latest output)
-                            if st.button("🔄 Sync AI Output for Selection"):
+                            if st.button("🔄 Sync AI Output & Move Transaction"):
                                 SHEET_ID = "10U-ddKGb_GllE0A3NXwhGCHeJssG3kdcujjftDAMQNY"
                                 GID = "90265671"
                                 csv_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}"
@@ -146,17 +150,18 @@ if 'main_df' in st.session_state:
                                     sheet_df = pd.read_csv(io.StringIO(response.text))
                                     
                                     if not sheet_df.empty:
-                                        # Get the very last row of the sheet (the latest AI output)
+                                        # Get latest AI output
                                         latest_output = sheet_df.iloc[-1]
-                                        new_pri = latest_output.get('Primary', 'Action Required')
-                                        new_sub = latest_output.get('Sub-Category', 'Uncategorized')
+                                        new_pri = str(latest_output.get('Primary', 'Action Required')).strip()
+                                        new_sub = str(latest_output.get('Sub-Category', 'Uncategorized')).strip()
                                         
-                                        # Apply to the currently selected description in the app
-                                        mask = st.session_state.main_df['Description'] == selected_desc
-                                        st.session_state.main_df.loc[mask, 'Primary'] = new_pri
-                                        st.session_state.main_df.loc[mask, 'Sub-Category'] = new_sub
+                                        # Force update to st.session_state.main_df
+                                        idx = st.session_state.main_df[st.session_state.main_df['Description'] == selected_desc].index
+                                        st.session_state.main_df.loc[idx, 'Primary'] = new_pri
+                                        st.session_state.main_df.loc[idx, 'Sub-Category'] = new_sub
                                         
-                                        st.success(f"Updated '{selected_desc}' to {new_pri} > {new_sub}")
+                                        st.success(f"Success! '{selected_desc}' moved to {new_pri} > {new_sub}")
+                                        # st.rerun() is critical here to move the item to the new folder
                                         st.rerun()
                                 except Exception as e: st.error(f"Sync error: {e}")
                     
@@ -166,7 +171,8 @@ if 'main_df' in st.session_state:
                 else:
                     sub_edited = st.data_editor(pri_df, column_config=get_cfg(SUB_CAT_MAP.get(pri, ALL_SUB_CATS)), use_container_width=True, key=f"edit_{pri}")
                     if not sub_edited.equals(pri_df):
+                        # Sync individual folder edits back to main session state
                         st.session_state.main_df.update(sub_edited)
                         st.rerun()
 else:
-    st.info("👋 Welcome Rahul! Upload a statement to begin.")
+    st.info("👋 Welcome Rahul! Upload a statement in the sidebar to begin.")

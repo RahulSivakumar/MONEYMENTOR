@@ -15,24 +15,16 @@ st.markdown("""
         border-bottom: 4px solid #FFD700; margin-bottom: 25px; text-align: center;
     }
     [data-testid="stMetric"] { background: #1a1a1a !important; padding: 15px; border-radius: 12px; border: 1px solid #333; }
-    [data-testid="stMetricValue"] > div { color: #FFD700 !important; }
-    
-    /* Opening Balance UI Matching Metrics */
-    .balance-card {
-        background: #1a1a1a;
-        padding: 15px;
-        border-radius: 12px;
-        border: 1px solid #333;
-        height: 100%;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
+    .balance-card { background: #1a1a1a; padding: 15px; border-radius: 12px; border: 1px solid #333; height: 100%; }
+    .stat-pill {
+        background: #262626; padding: 5px 12px; border-radius: 20px; 
+        color: #FFD700; font-size: 0.8rem; border: 1px solid #444;
+        display: inline-block; margin-right: 10px; margin-bottom: 10px;
     }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. LOGIC ENGINE & CATEGORY DEFINITIONS ---
-# Pre-defined mapping of Sub-Categories per Primary Category
+# --- 2. LOGIC ENGINE ---
 SUB_CAT_MAP = {
     "Expenses": ["Food", "Fuel", "House exp", "Personal", "Misc"],
     "Income": ["Salary", "Other Credits", "Investment Returns", "House"],
@@ -40,16 +32,13 @@ SUB_CAT_MAP = {
     "Savings": ["Salary Amt", "Extra income"],
     "Action Required": ["Uncategorized"]
 }
-
-# Flattened list for the Master Editor
 ALL_SUB_CATS = [item for sublist in SUB_CAT_MAP.values() for item in sublist]
 
 if 'rules' not in st.session_state:
     st.session_state.rules = {
         "zomato": ["Expenses", "Food"], "swiggy": ["Expenses", "Food"],
         "hpcl": ["Expenses", "Fuel"], "bpcl": ["Expenses", "Fuel"],
-        "salary": ["Income", "Salary"], "nifty bees": ["Investment", "ETF"],
-        "it bees": ["Investment", "ETF"], "zerodha": ["Investment", "Stock"]
+        "salary": ["Income", "Salary"], "nifty bees": ["Investment", "ETF"]
     }
 
 def tiered_categorizer(description):
@@ -63,88 +52,46 @@ def process_data(df, mapping):
     std = pd.DataFrame()
     std['Date'] = df[mapping['date']]
     std['Description'] = df[mapping['description']]
-    
     if 'balance' in mapping and mapping['balance'] in df.columns:
         std['RunningBalance'] = pd.to_numeric(df[mapping['balance']].astype(str).replace('[₹, ]', '', regex=True), errors='coerce').fillna(0.0)
-
     for col in ['Debit', 'Credit']:
         std[col] = pd.to_numeric(df[mapping[col.lower()]].astype(str).replace('[₹, ]', '', regex=True), errors='coerce').fillna(0.0)
-    
     res = std['Description'].apply(tiered_categorizer)
     std['Primary'], std['Sub-Category'] = zip(*res)
     return std
 
-# --- 3. SIDEBAR: WORKSPACE & RULE MANAGEMENT ---
+# --- 3. SIDEBAR ---
 with st.sidebar:
     st.markdown("### 🛠️ Workspace Controls")
     bank_choice = st.selectbox("Institution", ["HDFC Bank", "ICICI Bank", "SBI"])
-    
     MAPPINGS = {
         "HDFC Bank": {"date": "Date", "description": "Narration", "debit": "Withdrawal Amt.", "credit": "Deposit Amt.", "balance": "Closing Balance"},
         "ICICI Bank": {"date": "Value Date", "description": "Description", "debit": "Debit", "credit": "Credit", "balance": "Balance (INR)"},
         "SBI": {"date": "Date", "description": "Description", "debit": "Debit", "credit": "Credit", "balance": "Balance"}
     }
-    
     file = st.file_uploader("Drop Statement", type=['csv', 'xlsx'])
-    
     if st.button("🚀 Run Smart Audit") and file:
         df_raw = pd.read_csv(file) if file.name.endswith('.csv') else pd.read_excel(file)
         st.session_state.main_df = process_data(df_raw, MAPPINGS[bank_choice])
-
-    st.divider()
-    st.markdown("### ➕ Add Custom Rule")
-    new_kw = st.text_input("Keyword")
-    
-    # Allow user to type a new category or select existing
-    existing_primaries = list(SUB_CAT_MAP.keys())
-    new_pri = st.selectbox("Primary Category", existing_primaries)
-    
-    # Filtered sub-categories in sidebar
-    new_sub = st.selectbox("Sub-Category", SUB_CAT_MAP.get(new_pri, ["Uncategorized"]))
-    
-    if st.button("Save & Apply Rule"):
-        if new_kw:
-            st.session_state.rules[new_kw.lower()] = [new_pri, new_sub]
-            if 'main_df' in st.session_state:
-                res = st.session_state.main_df['Description'].apply(tiered_categorizer)
-                st.session_state.main_df['Primary'], st.session_state.main_df['Sub-Category'] = zip(*res)
-                st.rerun()
 
 # --- 4. MAIN DASHBOARD ---
 st.markdown("""<div class="dashboard-title"><h1>🏦 MoneyMentor <span style='color:#FFD700;'>Pro</span></h1></div>""", unsafe_allow_html=True)
 
 if 'main_df' in st.session_state:
+    # Use a copy for display to handle move logic
     df = st.session_state.main_df
     
-    # Balance Calculations
+    # Balance UI
     total_out, total_in = df['Debit'].sum(), df['Credit'].sum()
-    if 'RunningBalance' in df.columns:
-        closing_bal = df['RunningBalance'].iloc[-1]
-        first_row = df.iloc[0]
-        opening_bal = first_row['RunningBalance'] - first_row['Credit'] + first_row['Debit']
-    else:
-        opening_bal = 0.0
-        closing_bal = total_in - total_out
+    closing_bal = df['RunningBalance'].iloc[-1] if 'RunningBalance' in df.columns else total_in - total_out
+    opening_bal = (df['RunningBalance'].iloc[0] - df['Credit'].iloc[0] + df['Debit'].iloc[0]) if 'RunningBalance' in df.columns else 0.0
 
-    # opening and closing balance UI
     c_open, c_close = st.columns(2)
-    with c_open:
-        st.markdown(f"""<div class="balance-card"><p style="color: #888; margin:0; font-size: 0.8rem; letter-spacing:1px;">OPENING BALANCE</p><h2 style="color: #FFF; margin:0;">₹{opening_bal:,.2f}</h2></div>""", unsafe_allow_html=True)
-    with c_close:
-        st.markdown(f"""<div class="balance-card" style="border: 1px solid #FFD700;"><p style="color: #FFD700; margin:0; font-size: 0.8rem; letter-spacing:1px;">CLOSING BALANCE</p><h2 style="color: #FFD700; margin:0;">₹{closing_bal:,.2f}</h2></div>""", unsafe_allow_html=True)
-
-    st.write("") # Spacer
-
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Expenses", f"₹{total_out:,.2f}")
-    m2.metric("Total Income", f"₹{total_in:,.2f}")
-    m3.metric("Net Flow", f"₹{total_in - total_out:,.2f}")
-    pending = len(df[df['Primary'] == "Action Required"])
-    m4.metric("Uncategorized", pending, delta_color="inverse")
+    with c_open: st.markdown(f"""<div class="balance-card"><p style="color:#888;margin:0;font-size:0.8rem;">OPENING BALANCE</p><h2 style="color:#FFF;margin:0;">₹{opening_bal:,.2f}</h2></div>""", unsafe_allow_html=True)
+    with c_close: st.markdown(f"""<div class="balance-card" style="border:1px solid #FFD700;"><p style="color:#FFD700;margin:0;font-size:0.8rem;">CLOSING BALANCE</p><h2 style="color:#FFD700;margin:0;">₹{closing_bal:,.2f}</h2></div>""", unsafe_allow_html=True)
 
     tab1, tab2 = st.tabs(["📝 Master Data Editor", "📊 Advanced Summary"])
 
-    # Shared Table Configuration
     def get_cfg(sub_options):
         return {
             "Primary": st.column_config.SelectboxColumn("Primary", options=list(SUB_CAT_MAP.keys()), required=True),
@@ -162,26 +109,38 @@ if 'main_df' in st.session_state:
 
     with tab2:
         st.subheader("Dynamic Financial Pillars")
-        # DYNAMICALLY generate expanders for whatever categories exist in the data
         present_categories = sorted(df['Primary'].unique())
         
         for pri in present_categories:
-            pri_df = df[df['Primary'] == pri]
-            total_val = pri_df['Credit'].sum() if pri in ["Income", "Savings"] else pri_df['Debit'].sum()
-            
-            with st.expander(f"📂 {pri.upper()} — Total: ₹{total_val:,.2f} ({len(pri_df)} items)"):
-                # FILTERED Sub-categories for this specific pillar
-                current_sub_options = SUB_CAT_MAP.get(pri, ALL_SUB_CATS)
+            # DUAL-CONFIRMATION FILTER: 
+            # If we are looking at "Action Required", show everything still needing work.
+            # If looking at a category folder, only show items where sub-category is NOT "Uncategorized"
+            if pri == "Action Required":
+                pri_df = df[df['Primary'] == "Action Required"]
+            else:
+                pri_df = df[(df['Primary'] == pri) & (df['Sub-Category'] != "Uncategorized")]
+
+            if not pri_df.empty:
+                total_val = pri_df['Credit'].sum() if pri in ["Income", "Savings"] else pri_df['Debit'].sum()
                 
-                sub_edited = st.data_editor(
-                    pri_df, 
-                    column_config=get_cfg(current_sub_options), 
-                    use_container_width=True, 
-                    key=f"dyn_edit_{pri}"
-                )
-                
-                if not sub_edited.equals(pri_df):
-                    st.session_state.main_df.update(sub_edited)
-                    st.rerun()
+                with st.expander(f"📂 {pri.upper()} — Total: ₹{total_val:,.2f}"):
+                    # --- SMALL SUMMARY SECTION ---
+                    avg_val = pri_df['Debit'].mean() if pri not in ["Income", "Savings"] else pri_df['Credit'].mean()
+                    max_val = pri_df['Debit'].max() if pri not in ["Income", "Savings"] else pri_df['Credit'].max()
+                    
+                    st.markdown(f"""
+                        <div>
+                            <div class="stat-pill">Items: {len(pri_df)}</div>
+                            <div class="stat-pill">Average: ₹{avg_val:,.2f}</div>
+                            <div class="stat-pill">Largest: ₹{max_val:,.2f}</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                    
+                    current_sub_options = SUB_CAT_MAP.get(pri, ALL_SUB_CATS)
+                    sub_edited = st.data_editor(pri_df, column_config=get_cfg(current_sub_options), use_container_width=True, key=f"dyn_edit_{pri}")
+                    
+                    if not sub_edited.equals(pri_df):
+                        st.session_state.main_df.update(sub_edited)
+                        st.rerun()
 else:
-    st.info("👋 Welcome Rahul! Upload your statement in the sidebar to begin.")
+    st.info("👋 Welcome Rahul! Upload a statement to begin.")

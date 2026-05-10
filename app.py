@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import requests
+import json
 
 # --- 1. THEME & ADVANCED CSS ---
 st.set_page_config(page_title="MoneyMentor Pro", layout="wide", page_icon="⚡", initial_sidebar_state="expanded")
@@ -17,7 +19,6 @@ st.markdown("""
     [data-testid="stMetric"] { background: #1a1a1a !important; padding: 15px; border-radius: 12px; border: 1px solid #333; }
     [data-testid="stMetricValue"] > div { color: #FFD700 !important; }
     
-    /* Opening Balance UI Matching Metrics */
     .balance-card {
         background: #1a1a1a;
         padding: 15px;
@@ -32,7 +33,6 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- 2. LOGIC ENGINE & CATEGORY DEFINITIONS ---
-# Pre-defined mapping of Sub-Categories per Primary Category
 SUB_CAT_MAP = {
     "Expenses": ["Food", "Fuel", "House exp", "Personal", "Misc"],
     "Income": ["Salary", "Other Credits", "Investment Returns", "House"],
@@ -41,7 +41,6 @@ SUB_CAT_MAP = {
     "Action Required": ["Uncategorized"]
 }
 
-# Flattened list for the Master Editor
 ALL_SUB_CATS = [item for sublist in SUB_CAT_MAP.values() for item in sublist]
 
 if 'rules' not in st.session_state:
@@ -94,12 +93,7 @@ with st.sidebar:
     st.divider()
     st.markdown("### ➕ Add Custom Rule")
     new_kw = st.text_input("Keyword")
-    
-    # Allow user to type a new category or select existing
-    existing_primaries = list(SUB_CAT_MAP.keys())
-    new_pri = st.selectbox("Primary Category", existing_primaries)
-    
-    # Filtered sub-categories in sidebar
+    new_pri = st.selectbox("Primary Category", list(SUB_CAT_MAP.keys()))
     new_sub = st.selectbox("Sub-Category", SUB_CAT_MAP.get(new_pri, ["Uncategorized"]))
     
     if st.button("Save & Apply Rule"):
@@ -126,25 +120,24 @@ if 'main_df' in st.session_state:
         opening_bal = 0.0
         closing_bal = total_in - total_out
 
-    # opening and closing balance UI
+    # Balanced UI Header
     c_open, c_close = st.columns(2)
     with c_open:
         st.markdown(f"""<div class="balance-card"><p style="color: #888; margin:0; font-size: 0.8rem; letter-spacing:1px;">OPENING BALANCE</p><h2 style="color: #FFF; margin:0;">₹{opening_bal:,.2f}</h2></div>""", unsafe_allow_html=True)
     with c_close:
         st.markdown(f"""<div class="balance-card" style="border: 1px solid #FFD700;"><p style="color: #FFD700; margin:0; font-size: 0.8rem; letter-spacing:1px;">CLOSING BALANCE</p><h2 style="color: #FFD700; margin:0;">₹{closing_bal:,.2f}</h2></div>""", unsafe_allow_html=True)
 
-    st.write("") # Spacer
+    st.write("") 
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Total Expenses", f"₹{total_out:,.2f}")
     m2.metric("Total Income", f"₹{total_in:,.2f}")
     m3.metric("Net Flow", f"₹{total_in - total_out:,.2f}")
-    pending = len(df[df['Primary'] == "Action Required"])
-    m4.metric("Uncategorized", pending, delta_color="inverse")
+    pending_count = len(df[df['Primary'] == "Action Required"])
+    m4.metric("Uncategorized", pending_count, delta_color="inverse")
 
     tab1, tab2 = st.tabs(["📝 Master Data Editor", "📊 Advanced Summary"])
 
-    # Shared Table Configuration
     def get_cfg(sub_options):
         return {
             "Primary": st.column_config.SelectboxColumn("Primary", options=list(SUB_CAT_MAP.keys()), required=True),
@@ -162,26 +155,62 @@ if 'main_df' in st.session_state:
 
     with tab2:
         st.subheader("Dynamic Financial Pillars")
-        # DYNAMICALLY generate expanders for whatever categories exist in the data
         present_categories = sorted(df['Primary'].unique())
         
         for pri in present_categories:
-            pri_df = df[df['Primary'] == pri]
+            pri_df = df[df['Primary'] == pri].copy()
             total_val = pri_df['Credit'].sum() if pri in ["Income", "Savings"] else pri_df['Debit'].sum()
             
             with st.expander(f"📂 {pri.upper()} — Total: ₹{total_val:,.2f} ({len(pri_df)} items)"):
-                # FILTERED Sub-categories for this specific pillar
-                current_sub_options = SUB_CAT_MAP.get(pri, ALL_SUB_CATS)
                 
-                sub_edited = st.data_editor(
-                    pri_df, 
-                    column_config=get_cfg(current_sub_options), 
-                    use_container_width=True, 
-                    key=f"dyn_edit_{pri}"
-                )
-                
-                if not sub_edited.equals(pri_df):
-                    st.session_state.main_df.update(sub_edited)
-                    st.rerun()
+                # --- AI AUTO-CATEGORIZE SECTION ---
+                if pri == "Action Required":
+                    st.markdown("### 🤖 AI Auto-Categorizer")
+                    st.info("Select transactions below to send to the MoneyMentor Webhook.")
+                    
+                    pri_df.insert(0, "Select", False)
+                    
+                    selected_data = st.data_editor(
+                        pri_df,
+                        column_config={
+                            "Select": st.column_config.CheckboxColumn("Select", default=False),
+                            **get_cfg(SUB_CAT_MAP.get(pri, ALL_SUB_CATS))
+                        },
+                        disabled=["Date", "Description", "RunningBalance", "Primary", "Sub-Category"],
+                        use_container_width=True,
+                        key=f"ai_select_{pri}"
+                    )
+
+                    if st.button("⚡ Process with AI Webhook"):
+                        to_process = selected_data[selected_data["Select"] == True]
+                        if not to_process.empty:
+                            webhook_url = "https://moneymentor.app.n8n.cloud/webhook-test/208f0cbb-a2cd-435a-bce1-c79def3e971b"
+                            payload = to_process.drop(columns=["Select"]).to_dict(orient='records')
+                            try:
+                                with st.spinner("Pushing to n8n..."):
+                                    response = requests.post(webhook_url, json=payload, timeout=10)
+                                if response.status_code == 200:
+                                    st.success(f"Sent {len(to_process)} items to AI.")
+                                else:
+                                    st.error(f"Error: {response.status_code}")
+                            except Exception as e:
+                                st.error(f"Failed: {str(e)}")
+                        else:
+                            st.warning("Select items first.")
+                    st.divider()
+
+                # --- REGULAR FOLDER VIEW ---
+                else:
+                    current_sub_options = SUB_CAT_MAP.get(pri, ALL_SUB_CATS)
+                    sub_edited = st.data_editor(
+                        pri_df, 
+                        column_config=get_cfg(current_sub_options), 
+                        use_container_width=True, 
+                        key=f"dyn_edit_{pri}"
+                    )
+                    
+                    if not sub_edited.equals(pri_df):
+                        st.session_state.main_df.update(sub_edited)
+                        st.rerun()
 else:
-    st.info("👋 Welcome Rahul! Upload your statement in the sidebar to begin.")
+    st.info("👋 Welcome Rahul! Upload a statement in the sidebar to begin.")

@@ -109,26 +109,6 @@ if 'main_df' in st.session_state:
     with tab2:
         st.subheader("Dynamic Financial Pillars")
         
-        # --- SYNC FROM GOOGLE SHEETS ---
-        if st.button("🔄 Sync AI Categories from Google Sheet"):
-            SHEET_ID = "10U-ddKGb_GllE0A3NXwhGCHeJssG3kdcujjftDAMQNY"
-            GID = "90265671"
-            csv_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}"
-            
-            try:
-                with st.spinner("Fetching data from Sheet..."):
-                    response = requests.get(csv_url)
-                    sheet_df = pd.read_csv(io.StringIO(response.text))
-                    for _, row in sheet_df.iterrows():
-                        mask = st.session_state.main_df['Description'] == row['Description']
-                        if mask.any():
-                            st.session_state.main_df.loc[mask, 'Primary'] = row['Primary']
-                            st.session_state.main_df.loc[mask, 'Sub-Category'] = row['Sub-Category']
-                    st.success("Synced successfully!")
-                    st.rerun()
-            except Exception as e:
-                st.error(f"Sync failed: {e}")
-
         # Dynamic Folders
         present_categories = sorted(st.session_state.main_df['Primary'].unique())
         for pri in present_categories:
@@ -140,26 +120,47 @@ if 'main_df' in st.session_state:
                     st.markdown("### 🤖 Single-Item AI Categorizer")
                     
                     if not pri_df.empty:
-                        # Allow user to select one specific transaction to categorize
-                        selected_desc = st.selectbox("Select Transaction to Categorize", pri_df['Description'].unique())
-                        target_row = pri_df[pri_df['Description'] == selected_desc].iloc[0]
+                        # 1. Selection
+                        selected_desc = st.selectbox("Select Transaction to Categorize", pri_df['Description'].unique(), key="ai_select_box")
                         
-                        if st.button("⚡ Send Selected Transaction to n8n"):
-                            webhook_url = "https://moneymentor.app.n8n.cloud/webhook-test/208f0cbb-a2cd-435a-bce1-c79def3e971b"
-                            payload = {
-                                "Date": str(target_row['Date']),
-                                "Description": target_row['Description'],
-                                "Debit": target_row['Debit'],
-                                "Credit": target_row['Credit']
-                            }
-                            try:
-                                requests.post(webhook_url, json=payload)
-                                st.toast(f"Sent '{selected_desc}' to AI!", icon="🚀")
-                            except Exception as e:
-                                st.error(f"Failed to send: {e}")
+                        col_ai1, col_ai2 = st.columns(2)
+                        
+                        with col_ai1:
+                            if st.button("⚡ Send Selected to n8n"):
+                                target_row = pri_df[pri_df['Description'] == selected_desc].iloc[0]
+                                webhook_url = "https://moneymentor.app.n8n.cloud/webhook-test/208f0cbb-a2cd-435a-bce1-c79def3e971b"
+                                payload = {"Description": target_row['Description'], "Debit": target_row['Debit'], "Credit": target_row['Credit']}
+                                try:
+                                    requests.post(webhook_url, json=payload)
+                                    st.toast(f"Sent '{selected_desc}' to n8n!", icon="🚀")
+                                except: st.error("Webhook failed")
+
+                        with col_ai2:
+                            # 2. Sync Logic (No Description match needed, just takes latest output)
+                            if st.button("🔄 Sync AI Output for Selection"):
+                                SHEET_ID = "10U-ddKGb_GllE0A3NXwhGCHeJssG3kdcujjftDAMQNY"
+                                GID = "90265671"
+                                csv_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}"
+                                try:
+                                    response = requests.get(csv_url)
+                                    sheet_df = pd.read_csv(io.StringIO(response.text))
+                                    
+                                    if not sheet_df.empty:
+                                        # Get the very last row of the sheet (the latest AI output)
+                                        latest_output = sheet_df.iloc[-1]
+                                        new_pri = latest_output.get('Primary', 'Action Required')
+                                        new_sub = latest_output.get('Sub-Category', 'Uncategorized')
+                                        
+                                        # Apply to the currently selected description in the app
+                                        mask = st.session_state.main_df['Description'] == selected_desc
+                                        st.session_state.main_df.loc[mask, 'Primary'] = new_pri
+                                        st.session_state.main_df.loc[mask, 'Sub-Category'] = new_sub
+                                        
+                                        st.success(f"Updated '{selected_desc}' to {new_pri} > {new_sub}")
+                                        st.rerun()
+                                except Exception as e: st.error(f"Sync error: {e}")
                     
                     st.divider()
-                    st.write("Current Uncategorized Transactions:")
                     st.dataframe(pri_df, use_container_width=True)
 
                 else:
@@ -168,4 +169,4 @@ if 'main_df' in st.session_state:
                         st.session_state.main_df.update(sub_edited)
                         st.rerun()
 else:
-    st.info("👋 Welcome Rahul! Upload a statement in the sidebar to begin.")
+    st.info("👋 Welcome Rahul! Upload a statement to begin.")

@@ -16,11 +16,27 @@ st.markdown("""
     }
     [data-testid="stMetric"] { background: #1a1a1a !important; padding: 15px; border-radius: 12px; border: 1px solid #333; }
     [data-testid="stMetricValue"] > div { color: #FFD700 !important; }
+    
+    /* Matching Opening Balance UI to Metrics */
+    .balance-card {
+        background: #1a1a1a;
+        padding: 15px;
+        border-radius: 12px;
+        border: 1px solid #333;
+        height: 100%;
+    }
     </style>
     """, unsafe_allow_html=True)
 
 # --- 2. ENHANCED LOGIC ENGINE ---
 PRIMARY_CATS = ["Expenses", "Income", "Investment", "Savings"]
+SUB_CATS = [
+    "Food", "Fuel", "House exp", "Personal", "Misc",  # Expenses
+    "Salary", "Other Credits", "Investment Returns", "House",  # Income
+    "Mutual Funds", "Stock", "FNO", "Gold", "ETF",  # Investment
+    "Salary Amt", "Extra income",  # Savings
+    "Uncategorized"
+]
 
 if 'rules' not in st.session_state:
     st.session_state.rules = {
@@ -30,8 +46,7 @@ if 'rules' not in st.session_state:
         "salary": ["Income", "Salary"],
         "nifty bees": ["Investment", "ETF"], "it bees": ["Investment", "ETF"],
         "zerodha": ["Investment", "Stock"], "fno": ["Investment", "FNO"],
-        "gold": ["Investment", "Gold"],
-        "fd interest": ["Income", "Investment Returns"]
+        "gold": ["Investment", "Gold"]
     }
 
 def tiered_categorizer(description):
@@ -46,7 +61,6 @@ def process_data(df, mapping):
     std['Date'] = df[mapping['date']]
     std['Description'] = df[mapping['description']]
     
-    # Capture balance if it exists in the raw data
     if 'balance' in mapping and mapping['balance'] in df.columns:
         std['RunningBalance'] = df[mapping['balance']].astype(str).replace('[₹, ]', '', regex=True)
         std['RunningBalance'] = pd.to_numeric(std['RunningBalance'], errors='coerce').fillna(0.0)
@@ -59,7 +73,7 @@ def process_data(df, mapping):
     std['Primary'], std['Sub-Category'] = zip(*res)
     return std
 
-# --- 3. SIDEBAR: WORKSPACE & RULE INDEPENDENCE ---
+# --- 3. SIDEBAR ---
 with st.sidebar:
     st.markdown("### 🛠️ Workspace Controls")
     bank_choice = st.selectbox("Institution", ["HDFC Bank", "ICICI Bank", "SBI"])
@@ -70,7 +84,7 @@ with st.sidebar:
         "SBI": {"date": "Date", "description": "Description", "debit": "Debit", "credit": "Credit", "balance": "Balance"}
     }
     
-    file = st.file_uploader("Drop Statement (CSV/Excel)", type=['csv', 'xlsx'])
+    file = st.file_uploader("Drop Statement", type=['csv', 'xlsx'])
     
     if st.button("🚀 Run Smart Audit") and file:
         df_raw = pd.read_csv(file) if file.name.endswith('.csv') else pd.read_excel(file)
@@ -80,10 +94,10 @@ with st.sidebar:
     st.markdown("### ➕ Add Custom Rule")
     new_kw = st.text_input("Keyword")
     new_pri = st.selectbox("Primary Category", PRIMARY_CATS)
-    new_sub = st.text_input("Sub-Category")
+    new_sub = st.selectbox("Sub-Category", SUB_CATS)
     
     if st.button("Save & Apply Rule"):
-        if new_kw and new_sub:
+        if new_kw:
             st.session_state.rules[new_kw.lower()] = [new_pri, new_sub]
             if 'main_df' in st.session_state:
                 res = st.session_state.main_df['Description'].apply(tiered_categorizer)
@@ -96,87 +110,57 @@ st.markdown("""<div class="dashboard-title"><h1>🏦 MoneyMentor <span style='co
 if 'main_df' in st.session_state:
     df = st.session_state.main_df
     
-    # --- BALANCE CALCULATION LOGIC ---
+    # Balance Logic
     total_out = df['Debit'].sum()
     total_in = df['Credit'].sum()
-    net_flow = total_in - total_out
-    
     if 'RunningBalance' in df.columns:
         closing_bal = df['RunningBalance'].iloc[-1]
         first_row = df.iloc[0]
         opening_bal = first_row['RunningBalance'] - first_row['Credit'] + first_row['Debit']
     else:
         opening_bal = 0.0
-        closing_bal = net_flow
+        closing_bal = total_in - total_out
 
-    # --- VISUAL BALANCE HEADER ---
-    st.markdown(f"""
-        <div style="display: flex; gap: 20px; margin-bottom: 25px;">
-            <div style="flex: 1; background: #1a1a1a; padding: 20px; border-radius: 12px; border: 1px solid #333; border-left: 5px solid #888;">
-                <p style="color: #888; margin: 0; text-transform: uppercase; font-size: 0.7rem; letter-spacing: 1px;">Opening Balance</p>
-                <h2 style="color: #FFF; margin: 0;">₹{opening_bal:,.2f}</h2>
-            </div>
-            <div style="flex: 1; background: #1a1a1a; padding: 20px; border-radius: 12px; border: 1px solid #FFD700; border-left: 5px solid #FFD700;">
-                <p style="color: #FFD700; margin: 0; text-transform: uppercase; font-size: 0.7rem; letter-spacing: 1px;">Closing Balance</p>
-                <h2 style="color: #FFD700; margin: 0;">₹{closing_bal:,.2f}</h2>
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
+    # Balanced UI Header
+    c_open, c_close = st.columns(2)
+    with c_open:
+        st.markdown(f"""<div class="balance-card"><p style="color: #888; margin:0; font-size: 0.8rem;">OPENING BALANCE</p><h2 style="color: #FFF; margin:0;">₹{opening_bal:,.2f}</h2></div>""", unsafe_allow_html=True)
+    with c_close:
+        st.markdown(f"""<div class="balance-card" style="border: 1px solid #FFD700;"><p style="color: #FFD700; margin:0; font-size: 0.8rem;">CLOSING BALANCE</p><h2 style="color: #FFD700; margin:0;">₹{closing_bal:,.2f}</h2></div>""", unsafe_allow_html=True)
 
-    # --- TOP-LEVEL METRICS ---
+    st.write("") # Spacer
+
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Total Expenses", f"₹{total_out:,.2f}")
     m2.metric("Total Income", f"₹{total_in:,.2f}")
-    m3.metric("Net Flow", f"₹{net_flow:,.2f}", delta=f"{net_flow:,.2f}")
-    
+    m3.metric("Net Flow", f"₹{total_in - total_out:,.2f}")
     pending = len(df[df['Primary'] == "Action Required"])
-    m4.metric("Uncategorized", pending, delta_color="inverse" if pending > 0 else "normal")
+    m4.metric("Uncategorized", pending, delta_color="inverse")
 
     tab1, tab2 = st.tabs(["📝 Master Data Editor", "📊 Advanced Summary"])
 
+    # Config for both tables
+    col_cfg = {
+        "Primary": st.column_config.SelectboxColumn("Primary", options=PRIMARY_CATS + ["Action Required"], required=True),
+        "Sub-Category": st.column_config.SelectboxColumn("Sub-Category", options=SUB_CATS, required=True),
+        "Debit": st.column_config.NumberColumn("Debit", format="₹%.2f"),
+        "Credit": st.column_config.NumberColumn("Credit", format="₹%.2f"),
+    }
+
     with tab1:
-        st.subheader("Raw Transaction Feed")
-        edited_df = st.data_editor(
-            df,
-            column_config={
-                "Primary": st.column_config.SelectboxColumn("Primary", options=PRIMARY_CATS + ["Action Required"], required=True),
-                "Debit": st.column_config.NumberColumn("Debit", format="₹%.2f"),
-                "Credit": st.column_config.NumberColumn("Credit", format="₹%.2f"),
-            },
-            disabled=["Date", "Description", "RunningBalance"],
-            use_container_width=True,
-            key="main_editor"
-        )
+        edited_df = st.data_editor(df, column_config=col_cfg, disabled=["Date", "Description", "RunningBalance"], use_container_width=True, key="main_editor")
         if not edited_df.equals(df):
             st.session_state.main_df = edited_df
             st.rerun()
 
     with tab2:
-        st.subheader("Financial Pillar Breakdown")
-        display_categories = PRIMARY_CATS + ["Action Required"]
-        
-        for pri in display_categories:
+        for pri in PRIMARY_CATS + ["Action Required"]:
             pri_df = df[df['Primary'] == pri]
-            
-            if pri in ["Income", "Savings"]:
-                total_val = pri_df['Credit'].sum()
-            else:
-                total_val = pri_df['Debit'].sum()
-
-            with st.expander(f"{pri.upper()} — Total: ₹{total_val:,.2f} ({len(pri_df)} items)"):
-                if pri_df.empty:
-                    st.info(f"No transactions found for {pri}.")
-                else:
-                    sub_edited = st.data_editor(
-                        pri_df,
-                        column_config={
-                            "Primary": st.column_config.SelectboxColumn("Primary", options=PRIMARY_CATS + ["Action Required"]),
-                        },
-                        use_container_width=True,
-                        key=f"sum_edit_{pri}"
-                    )
-                    if not sub_edited.equals(pri_df):
-                        st.session_state.main_df.update(sub_edited)
-                        st.rerun()
+            total_val = pri_df['Credit'].sum() if pri in ["Income", "Savings"] else pri_df['Debit'].sum()
+            with st.expander(f"{pri.upper()} — Total: ₹{total_val:,.2f}"):
+                sub_edited = st.data_editor(pri_df, column_config=col_cfg, use_container_width=True, key=f"sum_{pri}")
+                if not sub_edited.equals(pri_df):
+                    st.session_state.main_df.update(sub_edited)
+                    st.rerun()
 else:
-    st.info("👋 Welcome Rahul! Upload a bank statement in the sidebar to begin your audit.")
+    st.info("👋 Welcome Rahul! Upload a statement to begin.")

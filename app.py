@@ -22,7 +22,7 @@ api_key = get_api_key()
 if api_key:
     client = genai.Client(api_key=api_key)
 else:
-    st.error("⚠️ **API Key Missing!** Add it to Streamlit Cloud Secrets.")
+    st.error("⚠️ **API Key Missing!** Please add GEMINI_API_KEY to your Streamlit Cloud Secrets.")
     st.stop()
 
 # --- 2. STRUCTURED DATA SCHEMAS ---
@@ -60,16 +60,15 @@ SUB_CAT_MAP = {
 }
 ALL_SUB_CATS = [item for sublist in SUB_CAT_MAP.values() for item in sublist]
 
-if 'rules' not in st.session_state:
-    st.session_state.rules = {"zomato": ["Expenses", "Food"], "swiggy": ["Expenses", "Food"]}
-
-# Initialize a version counter to force-refresh editors
-if 'editor_version' not in st.session_state:
-    st.session_state.editor_version = 0
+# Versioning to force UI refresh when state changes
+if 'v' not in st.session_state:
+    st.session_state.v = 0
 
 def run_ai_agent_batch(df_slice):
+    """Sends chunks with indices and strict instructions."""
     data_to_send = [{"row_index": int(idx), "text": str(row['Description'])} for idx, row in df_slice.iterrows()]
-    CHUNK_SIZE = 40 
+    
+    CHUNK_SIZE = 50 
     all_results = []
     chunks = [data_to_send[i:i + CHUNK_SIZE] for i in range(0, len(data_to_send), CHUNK_SIZE)]
     
@@ -79,8 +78,10 @@ def run_ai_agent_batch(df_slice):
     for idx, chunk in enumerate(chunks):
         status_text.info(f"🚀 AI Agent: Processing Batch {idx+1} of {len(chunks)}...")
         prompt = f"""
-        Act as a financial expert. Categorize these transactions into: {json.dumps(list(SUB_CAT_MAP.keys()))}.
-        Use ONLY exact category names. Use provided 'row_index'.
+        Act as a financial expert. Categorize these Indian bank transactions.
+        Allowed Primary Categories ONLY: {list(SUB_CAT_MAP.keys())}
+        Allowed Sub-Categories ONLY: {ALL_SUB_CATS}
+        Instructions: Use the provided 'row_index'. Return JSON list.
         Transactions: {json.dumps(chunk)}
         """
         try:
@@ -95,15 +96,17 @@ def run_ai_agent_batch(df_slice):
             )
             all_results.extend(json.loads(response.text))
             progress_bar.progress((idx + 1) / len(chunks))
+            
             if idx < len(chunks) - 1:
-                status_text.warning("🕒 Cooldown: Resting 12s...")
+                status_text.warning(f"🕒 Resting 12s to avoid Rate Limits...")
                 time.sleep(12) 
+                
         except Exception as e:
             if "429" in str(e):
-                status_text.error("🚦 Quota Full. Cooldown 20s...")
+                status_text.error("🚦 Quota Full. Automatic 20s cooldown...")
                 time.sleep(20)
             else:
-                st.error(f"AI Error: {e}")
+                st.error(f"AI Agent Error: {e}")
                 return None
     
     status_text.empty()
@@ -134,14 +137,20 @@ with st.sidebar:
     }
     file = st.file_uploader("Drop Statement", type=['csv', 'xlsx'])
     if st.button("🚀 Run Smart Audit") and file:
-        df_raw = pd.read_csv(file) if file.name.endswith('.csv') else pd.read_excel(file)
-        st.session_state.main_df = process_data(df_raw, MAPPINGS[bank_choice])
-        st.session_state.editor_version += 1 # Reset view on new upload
+        try:
+            df_raw = pd.read_csv(file) if file.name.endswith('.csv') else pd.read_excel(file)
+            st.session_state.main_df = process_data(df_raw, MAPPINGS[bank_choice])
+            st.session_state.v += 1
+        except Exception as e:
+            st.error(f"Parsing Error: {e}")
 
 # --- 6. MAIN DASHBOARD ---
 st.markdown("""<div class="dashboard-title"><h1>🏦 MoneyMentor <span style='color:#FFD700;'>Pro</span></h1></div>""", unsafe_allow_html=True)
 
 if 'main_df' in st.session_state:
+    # Double-buffer: work with a copy for the UI
+    current_df = st.session_state.main_df.copy()
+
     tab1, tab2 = st.tabs(["📝 Master Data Editor", "📊 Advanced Summary"])
 
     def get_cfg(sub_options):
@@ -153,48 +162,39 @@ if 'main_df' in st.session_state:
         }
 
     with tab1:
-        # Master Editor with dynamic key
+        # Dynamic Key f"v{st.session_state.v}" forces widget to reset after AI runs
         edited_df = st.data_editor(
-            st.session_state.main_df, 
+            current_df, 
             column_config=get_cfg(ALL_SUB_CATS), 
             use_container_width=True, 
-            key=f"master_editor_v{st.session_state.editor_version}"
+            key=f"editor_v{st.session_state.v}"
         )
         if not edited_df.equals(st.session_state.main_df):
             st.session_state.main_df = edited_df
             st.rerun()
 
     with tab2:
-        present_categories = sorted(st.session_state.main_df['Primary'].unique())
+        present_categories = sorted(current_df['Primary'].unique())
         for pri in present_categories:
-            pri_df = st.session_state.main_df[st.session_state.main_df['Primary'] == pri]
+            pri_df = current_df[current_df['Primary'] == pri]
             
             with st.expander(f"📂 {pri.upper()} ({len(pri_df)} items)"):
                 if pri == "Action Required":
-                    if st.button("⚡ Run AI Auto-Pilot", type="primary"):
+                    if st.button("⚡ Run AI Auto-Pilot", type="primary", key=f"ai_btn_v{st.session_state.v}"):
                         results = run_ai_agent_batch(pri_df)
                         if results:
+                            # Direct update into the Master Session State
                             for entry in results:
-                                # Ensure category exists in our map before applying
-                                if entry.primary in SUB_CAT_MAP:
-                                    st.session_state.main_df.at[entry.row_index, 'Primary'] = entry.primary
-                                    st.session_state.main_df.at[entry.row_index, 'Sub-Category'] = entry.sub_category
+                                if entry['primary'] in SUB_CAT_MAP:
+                                    st.session_state.main_df.at[entry['row_index'], 'Primary'] = entry['primary']
+                                    st.session_state.main_df.at[entry['row_index'], 'Sub-Category'] = entry['sub_category']
                             
-                            st.session_state.editor_version += 1 # KILL OLD EDITOR STATE
-                            st.success("Refined! UI Resetting...")
-                            time.sleep(1)
+                            # Increment version to "kill" the old editor and force refresh
+                            st.session_state.v += 1
+                            st.success("Refining complete!")
                             st.rerun()
                     st.dataframe(pri_df, use_container_width=True)
                 else:
-                    # Sub-folder editors also use the dynamic version key
-                    sub_edited = st.data_editor(
-                        pri_df, 
-                        column_config=get_cfg(SUB_CAT_MAP.get(pri, ALL_SUB_CATS)), 
-                        use_container_width=True, 
-                        key=f"editor_{pri}_v{st.session_state.editor_version}"
-                    )
-                    if not sub_edited.equals(pri_df):
-                        st.session_state.main_df.update(sub_edited)
-                        st.rerun()
+                    st.dataframe(pri_df, use_container_width=True)
 else:
-    st.info("👋 Upload a statement to begin.")
+    st.info("👋 Upload a statement in the sidebar to begin.")

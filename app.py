@@ -74,8 +74,8 @@ def tiered_categorizer(description):
     return "Action Required", "Uncategorized"
 
 def run_ai_agent_batch(descriptions):
-    """Sends transactions to Gemini in chunks to handle Rate Limits (429)."""
-    CHUNK_SIZE = 30 
+    """Sending larger chunks to reduce the number of requests (RPM) hits."""
+    CHUNK_SIZE = 50 
     all_results = []
     chunks = [descriptions[i:i + CHUNK_SIZE] for i in range(0, len(descriptions), CHUNK_SIZE)]
     
@@ -83,11 +83,10 @@ def run_ai_agent_batch(descriptions):
     status_text = st.empty()
 
     for idx, chunk in enumerate(chunks):
-        status_text.text(f"Processing chunk {idx+1} of {len(chunks)}...")
+        status_text.info(f"🚀 Processing Batch {idx+1} of {len(chunks)}...")
         prompt = f"""
-        Act as a financial expert for an Indian user. Categorize these bank transactions.
+        Act as a financial expert. Categorize these Indian bank transactions.
         Allowed Categories: {json.dumps(SUB_CAT_MAP)}
-        Instructions: Use Indian context. Swiggy/Zomato/Blinkit = Food. SIP/MF = Investment.
         Return a LIST of objects.
         Transactions: {json.dumps(chunk)}
         """
@@ -104,18 +103,22 @@ def run_ai_agent_batch(descriptions):
             all_results.extend(json.loads(response.text))
             progress_bar.progress((idx + 1) / len(chunks))
             
-            # Cooldown to stay under Free Tier RPM limits
-            if len(chunks) > 1:
-                time.sleep(5) 
+            # Cooldown logic: If we have more batches, wait to reset quota
+            if idx < len(chunks) - 1:
+                status_text.warning(f"🕒 Batch {idx+1} done. Resting 12s to avoid Rate Limits...")
+                time.sleep(12) 
                 
         except Exception as e:
             if "429" in str(e):
-                st.warning("Rate limit hit. Resting for 10 seconds...")
-                time.sleep(10)
+                status_text.error("🚦 Quota Full. Automatic 20s cooldown initiated...")
+                time.sleep(20)
+                # After waiting, we don't 'continue' - we'll let the user re-trigger or add retry logic
             else:
                 st.error(f"AI Agent Error: {e}")
                 return None
     
+    status_text.success("✅ All transactions categorized successfully!")
+    time.sleep(2)
     status_text.empty()
     progress_bar.empty()
     return all_results
@@ -139,84 +142,4 @@ def process_data(df, mapping):
 # --- 5. SIDEBAR ---
 with st.sidebar:
     st.markdown("### 🛠️ Workspace Controls")
-    bank_choice = st.selectbox("Institution", ["HDFC Bank", "ICICI Bank", "SBI"])
-    MAPPINGS = {
-        "HDFC Bank": {"date": "Date", "description": "Narration", "debit": "Withdrawal Amt.", "credit": "Deposit Amt.", "balance": "Closing Balance"},
-        "ICICI Bank": {"date": "Value Date", "description": "Description", "debit": "Debit", "credit": "Credit", "balance": "Balance (INR)"},
-        "SBI": {"date": "Date", "description": "Description", "debit": "Debit", "credit": "Credit", "balance": "Balance"}
-    }
-    file = st.file_uploader("Drop Statement", type=['csv', 'xlsx'])
-    if st.button("🚀 Run Smart Audit") and file:
-        try:
-            df_raw = pd.read_csv(file) if file.name.endswith('.csv') else pd.read_excel(file)
-            st.session_state.main_df = process_data(df_raw, MAPPINGS[bank_choice])
-        except Exception as e:
-            st.error(f"Parsing Error: {e}")
-
-# --- 6. MAIN DASHBOARD ---
-st.markdown("""<div class="dashboard-title"><h1>🏦 MoneyMentor <span style='color:#FFD700;'>Pro</span></h1></div>""", unsafe_allow_html=True)
-
-if 'main_df' in st.session_state:
-    total_out, total_in = st.session_state.main_df['Debit'].sum(), st.session_state.main_df['Credit'].sum()
-    closing_bal = st.session_state.main_df['RunningBalance'].iloc[-1] if 'RunningBalance' in st.session_state.main_df.columns else (total_in - total_out)
-    
-    c_open, c_close = st.columns(2)
-    with c_open: st.markdown(f"""<div class="balance-card"><p style="color:#888;margin:0;font-size:0.8rem;">TOTAL INFLOW</p><h2 style="color:#FFF;margin:0;">₹{total_in:,.2f}</h2></div>""", unsafe_allow_html=True)
-    with c_close: st.markdown(f"""<div class="balance-card" style="border: 1px solid #FFD700;"><p style="color:#FFD700;margin:0;font-size:0.8rem;">ESTIMATED CLOSING</p><h2 style="color:#FFD700;margin:0;">₹{closing_bal:,.2f}</h2></div>""", unsafe_allow_html=True)
-
-    tab1, tab2 = st.tabs(["📝 Master Data Editor", "📊 Advanced Summary"])
-
-    def get_cfg(sub_options):
-        return {
-            "Primary": st.column_config.SelectboxColumn("Primary", options=list(SUB_CAT_MAP.keys()), required=True),
-            "Sub-Category": st.column_config.SelectboxColumn("Sub-Category", options=sub_options, required=True),
-            "Debit": st.column_config.NumberColumn("Debit", format="₹%.2f"),
-            "Credit": st.column_config.NumberColumn("Credit", format="₹%.2f"),
-        }
-
-    with tab1:
-        st.subheader("Raw Transaction Feed")
-        edited_df = st.data_editor(
-            st.session_state.main_df, 
-            column_config=get_cfg(ALL_SUB_CATS), 
-            disabled=["Date", "Description", "RunningBalance"], 
-            use_container_width=True, 
-            key="main_editor"
-        )
-        if not edited_df.equals(st.session_state.main_df):
-            st.session_state.main_df = edited_df
-            st.rerun()
-
-    with tab2:
-        st.subheader("Dynamic Financial Pillars")
-        present_categories = sorted(st.session_state.main_df['Primary'].unique())
-        
-        for pri in present_categories:
-            pri_df = st.session_state.main_df[st.session_state.main_df['Primary'] == pri].copy()
-            total_val = pri_df['Credit'].sum() if pri in ["Income", "Savings"] else pri_df['Debit'].sum()
-            
-            with st.expander(f"📂 {pri.upper()} — Total: ₹{total_val:,.2f} ({len(pri_df)} items)"):
-                if pri == "Action Required":
-                    st.markdown("### 🤖 AI Smart Categorizer")
-                    uncategorized_items = pri_df['Description'].unique().tolist()
-                    
-                    if st.button("⚡ Run AI Auto-Pilot", type="primary", key="ai_btn"):
-                        if uncategorized_items:
-                            with st.spinner("Agent mapping dependencies..."):
-                                ai_results = run_ai_agent_batch(uncategorized_items)
-                                if ai_results:
-                                    for entry in ai_results:
-                                        rows = st.session_state.main_df['Description'] == entry['description']
-                                        st.session_state.main_df.loc[rows, 'Primary'] = entry['primary']
-                                        st.session_state.main_df.loc[rows, 'Sub-Category'] = entry['sub_category']
-                                    st.success("Batch Categorization Complete!")
-                                    st.rerun()
-                    st.divider()
-                    st.dataframe(pri_df, use_container_width=True)
-                else:
-                    sub_edited = st.data_editor(pri_df, column_config=get_cfg(SUB_CAT_MAP.get(pri, ALL_SUB_CATS)), use_container_width=True, key=f"edit_{pri}")
-                    if not sub_edited.equals(pri_df):
-                        st.session_state.main_df.update(sub_edited)
-                        st.rerun()
-else:
-    st.info("👋 Welcome Rahul! Upload a statement in the sidebar to begin.")
+    bank_

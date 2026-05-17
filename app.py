@@ -157,4 +157,41 @@ if 'main_df' in st.session_state:
 
     with tab1:
         st.subheader("Raw Transaction Feed")
-        edited_df = st.data_editor(st.session_state.main_df, column_config=get_cfg(ALL_SUB_CATS), disabled=["Date", "Description", "
+        edited_df = st.data_editor(st.session_state.main_df, column_config=get_cfg(ALL_SUB_CATS), disabled=["Date", "Description", "RunningBalance"], use_container_width=True, key="main_editor")
+        if not edited_df.equals(st.session_state.main_df):
+            st.session_state.main_df = edited_df
+            st.rerun()
+
+    with tab2:
+        st.subheader("Dynamic Financial Pillars")
+        present_categories = sorted(st.session_state.main_df['Primary'].unique())
+        
+        for pri in present_categories:
+            pri_df = st.session_state.main_df[st.session_state.main_df['Primary'] == pri].copy()
+            total_val = pri_df['Credit'].sum() if pri in ["Income", "Savings"] else pri_df['Debit'].sum()
+            
+            with st.expander(f"📂 {pri.upper()} — Total: ₹{total_val:,.2f} ({len(pri_df)} items)"):
+                if pri == "Action Required":
+                    st.markdown("### 🤖 AI Smart Categorizer")
+                    uncategorized_items = pri_df['Description'].unique().tolist()
+                    
+                    if st.button("⚡ Run AI Auto-Pilot", type="primary", key="ai_btn"):
+                        if uncategorized_items:
+                            with st.spinner(f"Agent analyzing {len(uncategorized_items)} transactions..."):
+                                ai_results = run_ai_agent_batch(uncategorized_items)
+                                if ai_results:
+                                    for entry in ai_results:
+                                        rows = st.session_state.main_df['Description'] == entry['description']
+                                        st.session_state.main_df.loc[rows, 'Primary'] = entry['primary']
+                                        st.session_state.main_df.loc[rows, 'Sub-Category'] = entry['sub_category']
+                                    st.success("Batch Categorization Complete!")
+                                    st.rerun()
+                    st.divider()
+                    st.dataframe(pri_df, use_container_width=True)
+                else:
+                    sub_edited = st.data_editor(pri_df, column_config=get_cfg(SUB_CAT_MAP.get(pri, ALL_SUB_CATS)), use_container_width=True, key=f"edit_{pri}")
+                    if not sub_edited.equals(pri_df):
+                        st.session_state.main_df.update(sub_edited)
+                        st.rerun()
+else:
+    st.info("👋 Welcome Rahul! Upload a statement in the sidebar to begin.")

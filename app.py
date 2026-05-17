@@ -3,16 +3,32 @@ import pandas as pd
 import numpy as np
 import json
 import io
+import os
 from google import genai
 from google.genai import types
 from pydantic import BaseModel
 
-# --- 1. AI CLIENT & SCHEMA ---
-# Pulls key from .streamlit/secrets.toml
-try:
-    client = genai.Client(api_key=st.secrets["AIzaSyBuPAL0E6GabjEwxMxi6wAigYb08tQbtUQ"])
-except Exception:
-    st.error("API Key missing! Please add GEMINI_API_KEY to .streamlit/secrets.toml")
+# --- 1. AI CLIENT & KEY RECOVERY ---
+# This version checks both st.secrets and standard environment variables
+def get_api_key():
+    if "GEMINI_API_KEY" in st.secrets:
+        return st.secrets["GEMINI_API_KEY"]
+    elif os.environ.get("GEMINI_API_KEY"):
+        return os.environ.get("GEMINI_API_KEY")
+    return None
+
+api_key = get_api_key()
+
+if api_key:
+    client = genai.Client(api_key=api_key)
+else:
+    st.error("⚠️ **API Key Missing!**")
+    st.info("""
+    **To fix this on Streamlit Cloud:**
+    1. Go to App Settings > Secrets.
+    2. Add: `GEMINI_API_KEY = "your_key_here"`
+    3. Ensure there are no spaces around the name.
+    """)
     st.stop()
 
 class CategorizedTransaction(BaseModel):
@@ -62,14 +78,10 @@ def tiered_categorizer(description):
     return "Action Required", "Uncategorized"
 
 def run_ai_agent_batch(descriptions):
-    """Sends a batch of transaction strings to Gemini for categorization."""
     prompt = f"""
     Act as a financial expert for an Indian user. Categorize these bank transactions.
     Allowed Categories: {json.dumps(SUB_CAT_MAP)}
-    Instructions: 
-    - Use Indian context (Zomato/Swiggy/Blinkit = Food).
-    - If it's a person transfer, use 'Misc'.
-    - If it's Stock/MF/SIP, use 'Investment'.
+    Instructions: Use Indian context. Person transfers = Misc. Stocks/MF/SIP = Investment.
     Transactions: {json.dumps(descriptions)}
     """
     try:
@@ -89,12 +101,18 @@ def run_ai_agent_batch(descriptions):
 
 def process_data(df, mapping):
     std = pd.DataFrame()
+    # Normalize column names to avoid case-sensitivity issues
+    df.columns = [c.strip() for c in df.columns]
+    
     std['Date'] = df[mapping['date']]
     std['Description'] = df[mapping['description']]
+    
     if 'balance' in mapping and mapping['balance'] in df.columns:
         std['RunningBalance'] = pd.to_numeric(df[mapping['balance']].astype(str).replace('[₹, ]', '', regex=True), errors='coerce').fillna(0.0)
+    
     for col in ['Debit', 'Credit']:
         std[col] = pd.to_numeric(df[mapping[col.lower()]].astype(str).replace('[₹, ]', '', regex=True), errors='coerce').fillna(0.0)
+    
     res = std['Description'].apply(tiered_categorizer)
     std['Primary'], std['Sub-Category'] = zip(*res)
     return std
@@ -110,14 +128,16 @@ with st.sidebar:
     }
     file = st.file_uploader("Drop Statement", type=['csv', 'xlsx'])
     if st.button("🚀 Run Smart Audit") and file:
-        df_raw = pd.read_csv(file) if file.name.endswith('.csv') else pd.read_excel(file)
-        st.session_state.main_df = process_data(df_raw, MAPPINGS[bank_choice])
+        try:
+            df_raw = pd.read_csv(file) if file.name.endswith('.csv') else pd.read_excel(file)
+            st.session_state.main_df = process_data(df_raw, MAPPINGS[bank_choice])
+        except Exception as e:
+            st.error(f"File Parsing Error: {e}. Ensure the selected bank matches the file format.")
 
 # --- 5. MAIN DASHBOARD ---
 st.markdown("""<div class="dashboard-title"><h1>🏦 MoneyMentor <span style='color:#FFD700;'>Pro</span></h1></div>""", unsafe_allow_html=True)
 
 if 'main_df' in st.session_state:
-    # Balance UI
     total_out, total_in = st.session_state.main_df['Debit'].sum(), st.session_state.main_df['Credit'].sum()
     closing_bal = st.session_state.main_df['RunningBalance'].iloc[-1] if 'RunningBalance' in st.session_state.main_df.columns else (total_in - total_out)
     
@@ -166,11 +186,10 @@ if 'main_df' in st.session_state:
                                         st.session_state.main_df.loc[rows, 'Sub-Category'] = mapping['sub_category']
                                     st.success("Categorization Complete!")
                                     st.rerun()
-                        else:
-                            st.info("No items require AI action.")
                     st.divider()
                     st.dataframe(pri_df, use_container_width=True)
                 else:
+                    # Sync logic to update main session state when sub-folders are edited
                     sub_edited = st.data_editor(pri_df, column_config=get_cfg(SUB_CAT_MAP.get(pri, ALL_SUB_CATS)), use_container_width=True, key=f"edit_{pri}")
                     if not sub_edited.equals(pri_df):
                         st.session_state.main_df.update(sub_edited)

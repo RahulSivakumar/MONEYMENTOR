@@ -26,7 +26,6 @@ else:
     st.stop()
 
 # --- 2. STRUCTURED DATA SCHEMAS ---
-# We use row_index to map AI results back to the exact row in the DataFrame
 class TransactionResult(BaseModel):
     row_index: int
     primary: str
@@ -75,9 +74,8 @@ def tiered_categorizer(description):
     return "Action Required", "Uncategorized"
 
 def run_ai_agent_batch(df_slice):
-    """Sends chunks with indices to ensure 100% update accuracy."""
-    # Convert dataframe slice to a simple index-text list
-    data_to_send = [{"row_index": idx, "text": row['Description']} for idx, row in df_slice.iterrows()]
+    # Convert dataframe slice to index-text list
+    data_to_send = [{"row_index": int(idx), "text": str(row['Description'])} for idx, row in df_slice.iterrows()]
     
     CHUNK_SIZE = 40 
     all_results = []
@@ -87,11 +85,12 @@ def run_ai_agent_batch(df_slice):
     status_text = st.empty()
 
     for idx, chunk in enumerate(chunks):
-        status_text.info(f"🚀 Processing Batch {idx+1} of {len(chunks)}...")
+        status_text.info(f"🚀 AI Agent: Processing Batch {idx+1} of {len(chunks)}...")
         prompt = f"""
         Act as a financial expert. Categorize these Indian bank transactions.
         Allowed Categories: {json.dumps(SUB_CAT_MAP)}
         Instructions: Use the provided 'row_index' for each 'text'. 
+        Return a LIST of objects.
         Transactions: {json.dumps(chunk)}
         """
         try:
@@ -113,10 +112,10 @@ def run_ai_agent_batch(df_slice):
                 
         except Exception as e:
             if "429" in str(e):
-                status_text.error("🚦 Quota Full. Automatic 20s cooldown...")
+                status_text.error("🚦 Quota Full. Cooldown active...")
                 time.sleep(20)
             else:
-                st.error(f"AI Agent Error: {e}")
+                st.error(f"AI Error: {e}")
                 return None
     
     status_text.empty()
@@ -160,7 +159,6 @@ with st.sidebar:
 st.markdown("""<div class="dashboard-title"><h1>🏦 MoneyMentor <span style='color:#FFD700;'>Pro</span></h1></div>""", unsafe_allow_html=True)
 
 if 'main_df' in st.session_state:
-    # Balance UI
     total_out, total_in = st.session_state.main_df['Debit'].sum(), st.session_state.main_df['Credit'].sum()
     closing_bal = st.session_state.main_df['RunningBalance'].iloc[-1] if 'RunningBalance' in st.session_state.main_df.columns else (total_in - total_out)
     
@@ -196,7 +194,8 @@ if 'main_df' in st.session_state:
         present_categories = sorted(st.session_state.main_df['Primary'].unique())
         
         for pri in present_categories:
-            pri_df = st.session_state.main_df[st.session_state.main_df['Primary'] == pri].copy()
+            # IMPORTANT: Filtered view for UI
+            pri_df = st.session_state.main_df[st.session_state.main_df['Primary'] == pri]
             total_val = pri_df['Credit'].sum() if pri in ["Income", "Savings"] else pri_df['Debit'].sum()
             
             with st.expander(f"📂 {pri.upper()} — Total: ₹{total_val:,.2f} ({len(pri_df)} items)"):
@@ -206,11 +205,13 @@ if 'main_df' in st.session_state:
                         if not pri_df.empty:
                             ai_results = run_ai_agent_batch(pri_df)
                             if ai_results:
+                                # Update master dataframe using indices returned by AI
                                 for entry in ai_results:
-                                    row_idx = entry['row_index']
-                                    st.session_state.main_df.at[row_idx, 'Primary'] = entry['primary']
-                                    st.session_state.main_df.at[row_idx, 'Sub-Category'] = entry['sub_category']
-                                st.success("Audit complete! Refreshing view...")
+                                    master_idx = entry['row_index']
+                                    st.session_state.main_df.loc[master_idx, 'Primary'] = entry['primary']
+                                    st.session_state.main_df.loc[master_idx, 'Sub-Category'] = entry['sub_category']
+                                
+                                st.success("Audit complete! Refreshing...")
                                 time.sleep(1)
                                 st.rerun()
                     st.divider()
@@ -218,6 +219,7 @@ if 'main_df' in st.session_state:
                 else:
                     sub_edited = st.data_editor(pri_df, column_config=get_cfg(SUB_CAT_MAP.get(pri, ALL_SUB_CATS)), use_container_width=True, key=f"edit_{pri}")
                     if not sub_edited.equals(pri_df):
+                        # Force sync specific row updates back to master state
                         st.session_state.main_df.update(sub_edited)
                         st.rerun()
 else:

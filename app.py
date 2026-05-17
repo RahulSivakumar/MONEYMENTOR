@@ -4,6 +4,7 @@ import numpy as np
 import json
 import io
 import os
+import time
 from google import genai
 from google.genai import types
 from pydantic import BaseModel
@@ -21,11 +22,10 @@ api_key = get_api_key()
 if api_key:
     client = genai.Client(api_key=api_key)
 else:
-    st.error("⚠️ **API Key Missing!**")
+    st.error("⚠️ **API Key Missing!** Please add GEMINI_API_KEY to your Streamlit Cloud Secrets.")
     st.stop()
 
 # --- 2. STRUCTURED DATA SCHEMAS ---
-# Using a List-based schema to avoid 'additionalProperties' errors
 class TransactionResult(BaseModel):
     description: str
     primary: str
@@ -74,31 +74,51 @@ def tiered_categorizer(description):
     return "Action Required", "Uncategorized"
 
 def run_ai_agent_batch(descriptions):
-    prompt = f"""
-    Act as a financial expert for an Indian user. Categorize these bank transactions.
-    Allowed Categories: {json.dumps(SUB_CAT_MAP)}
-    Instructions: 
-    - Use Indian context (Swiggy/Zomato/Blinkit = Food).
-    - If it's a person transfer, use 'Misc'.
-    - If it's Stock/MF/SIP/AMC, use 'Investment'.
+    """Sends transactions to Gemini in chunks to handle Rate Limits (429)."""
+    CHUNK_SIZE = 15 
+    all_results = []
+    chunks = [descriptions[i:i + CHUNK_SIZE] for i in range(0, len(descriptions), CHUNK_SIZE)]
     
-    Return a LIST of objects.
-    Transactions: {json.dumps(descriptions)}
-    """
-    try:
-        response = client.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=list[TransactionResult],
-                temperature=0.1
-            ),
-        )
-        return json.loads(response.text)
-    except Exception as e:
-        st.error(f"AI Agent Error: {e}")
-        return None
+    progress_bar = st.progress(0.0)
+    status_text = st.empty()
+
+    for idx, chunk in enumerate(chunks):
+        status_text.text(f"Processing chunk {idx+1} of {len(chunks)}...")
+        prompt = f"""
+        Act as a financial expert for an Indian user. Categorize these bank transactions.
+        Allowed Categories: {json.dumps(SUB_CAT_MAP)}
+        Instructions: Use Indian context. Swiggy/Zomato/Blinkit = Food. SIP/MF = Investment.
+        Return a LIST of objects.
+        Transactions: {json.dumps(chunk)}
+        """
+        try:
+            response = client.models.generate_content(
+                model='gemini-2.0-flash',
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=list[TransactionResult],
+                    temperature=0.1
+                ),
+            )
+            all_results.extend(json.loads(response.text))
+            progress_bar.progress((idx + 1) / len(chunks))
+            
+            # Cooldown to stay under Free Tier RPM limits
+            if len(chunks) > 1:
+                time.sleep(3) 
+                
+        except Exception as e:
+            if "429" in str(e):
+                st.warning("Rate limit hit. Resting for 10 seconds...")
+                time.sleep(10)
+            else:
+                st.error(f"AI Agent Error: {e}")
+                return None
+    
+    status_text.empty()
+    progress_bar.empty()
+    return all_results
 
 def process_data(df, mapping):
     std = pd.DataFrame()
@@ -137,7 +157,6 @@ with st.sidebar:
 st.markdown("""<div class="dashboard-title"><h1>🏦 MoneyMentor <span style='color:#FFD700;'>Pro</span></h1></div>""", unsafe_allow_html=True)
 
 if 'main_df' in st.session_state:
-    # Header Metrics
     total_out, total_in = st.session_state.main_df['Debit'].sum(), st.session_state.main_df['Credit'].sum()
     closing_bal = st.session_state.main_df['RunningBalance'].iloc[-1] if 'RunningBalance' in st.session_state.main_df.columns else (total_in - total_out)
     
@@ -157,7 +176,13 @@ if 'main_df' in st.session_state:
 
     with tab1:
         st.subheader("Raw Transaction Feed")
-        edited_df = st.data_editor(st.session_state.main_df, column_config=get_cfg(ALL_SUB_CATS), disabled=["Date", "Description", "RunningBalance"], use_container_width=True, key="main_editor")
+        edited_df = st.data_editor(
+            st.session_state.main_df, 
+            column_config=get_cfg(ALL_SUB_CATS), 
+            disabled=["Date", "Description", "RunningBalance"], 
+            use_container_width=True, 
+            key="main_editor"
+        )
         if not edited_df.equals(st.session_state.main_df):
             st.session_state.main_df = edited_df
             st.rerun()
@@ -177,7 +202,7 @@ if 'main_df' in st.session_state:
                     
                     if st.button("⚡ Run AI Auto-Pilot", type="primary", key="ai_btn"):
                         if uncategorized_items:
-                            with st.spinner(f"Agent analyzing {len(uncategorized_items)} transactions..."):
+                            with st.spinner("Agent mapping dependencies..."):
                                 ai_results = run_ai_agent_batch(uncategorized_items)
                                 if ai_results:
                                     for entry in ai_results:

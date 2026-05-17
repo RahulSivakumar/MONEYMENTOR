@@ -10,7 +10,7 @@ from pydantic import BaseModel
 # --- 1. AI CLIENT & SCHEMA ---
 # Pulls key from .streamlit/secrets.toml
 try:
-    client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+    client = genai.Client(api_key=st.secrets["AIzaSyBuPAL0E6GabjEwxMxi6wAigYb08tQbtUQ"])
 except Exception:
     st.error("API Key missing! Please add GEMINI_API_KEY to .streamlit/secrets.toml")
     st.stop()

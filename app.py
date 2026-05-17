@@ -26,8 +26,9 @@ else:
     st.stop()
 
 # --- 2. STRUCTURED DATA SCHEMAS ---
+# We use row_index to map AI results back to the exact row in the DataFrame
 class TransactionResult(BaseModel):
-    description: str
+    row_index: int
     primary: str
     sub_category: str
 
@@ -73,11 +74,14 @@ def tiered_categorizer(description):
         if kw in desc: return mapping[0], mapping[1]
     return "Action Required", "Uncategorized"
 
-def run_ai_agent_batch(descriptions):
-    """Sending larger chunks to reduce the number of requests (RPM) hits."""
-    CHUNK_SIZE = 50 
+def run_ai_agent_batch(df_slice):
+    """Sends chunks with indices to ensure 100% update accuracy."""
+    # Convert dataframe slice to a simple index-text list
+    data_to_send = [{"row_index": idx, "text": row['Description']} for idx, row in df_slice.iterrows()]
+    
+    CHUNK_SIZE = 40 
     all_results = []
-    chunks = [descriptions[i:i + CHUNK_SIZE] for i in range(0, len(descriptions), CHUNK_SIZE)]
+    chunks = [data_to_send[i:i + CHUNK_SIZE] for i in range(0, len(data_to_send), CHUNK_SIZE)]
     
     progress_bar = st.progress(0.0)
     status_text = st.empty()
@@ -87,7 +91,7 @@ def run_ai_agent_batch(descriptions):
         prompt = f"""
         Act as a financial expert. Categorize these Indian bank transactions.
         Allowed Categories: {json.dumps(SUB_CAT_MAP)}
-        Return a LIST of objects.
+        Instructions: Use the provided 'row_index' for each 'text'. 
         Transactions: {json.dumps(chunk)}
         """
         try:
@@ -103,22 +107,18 @@ def run_ai_agent_batch(descriptions):
             all_results.extend(json.loads(response.text))
             progress_bar.progress((idx + 1) / len(chunks))
             
-            # Cooldown logic: If we have more batches, wait to reset quota
             if idx < len(chunks) - 1:
-                status_text.warning(f"🕒 Batch {idx+1} done. Resting 12s to avoid Rate Limits...")
+                status_text.warning(f"🕒 Resting 12s to avoid Rate Limits...")
                 time.sleep(12) 
                 
         except Exception as e:
             if "429" in str(e):
-                status_text.error("🚦 Quota Full. Automatic 20s cooldown initiated...")
+                status_text.error("🚦 Quota Full. Automatic 20s cooldown...")
                 time.sleep(20)
-                # After waiting, we don't 'continue' - we'll let the user re-trigger or add retry logic
             else:
                 st.error(f"AI Agent Error: {e}")
                 return None
     
-    status_text.success("✅ All transactions categorized successfully!")
-    time.sleep(2)
     status_text.empty()
     progress_bar.empty()
     return all_results
@@ -160,6 +160,7 @@ with st.sidebar:
 st.markdown("""<div class="dashboard-title"><h1>🏦 MoneyMentor <span style='color:#FFD700;'>Pro</span></h1></div>""", unsafe_allow_html=True)
 
 if 'main_df' in st.session_state:
+    # Balance UI
     total_out, total_in = st.session_state.main_df['Debit'].sum(), st.session_state.main_df['Credit'].sum()
     closing_bal = st.session_state.main_df['RunningBalance'].iloc[-1] if 'RunningBalance' in st.session_state.main_df.columns else (total_in - total_out)
     
@@ -201,16 +202,16 @@ if 'main_df' in st.session_state:
             with st.expander(f"📂 {pri.upper()} — Total: ₹{total_val:,.2f} ({len(pri_df)} items)"):
                 if pri == "Action Required":
                     st.markdown("### 🤖 AI Smart Categorizer")
-                    uncategorized_items = pri_df['Description'].unique().tolist()
-                    
                     if st.button("⚡ Run AI Auto-Pilot", type="primary", key="ai_btn"):
-                        if uncategorized_items:
-                            ai_results = run_ai_agent_batch(uncategorized_items)
+                        if not pri_df.empty:
+                            ai_results = run_ai_agent_batch(pri_df)
                             if ai_results:
                                 for entry in ai_results:
-                                    rows = st.session_state.main_df['Description'] == entry['description']
-                                    st.session_state.main_df.loc[rows, 'Primary'] = entry['primary']
-                                    st.session_state.main_df.loc[rows, 'Sub-Category'] = entry['sub_category']
+                                    row_idx = entry['row_index']
+                                    st.session_state.main_df.at[row_idx, 'Primary'] = entry['primary']
+                                    st.session_state.main_df.at[row_idx, 'Sub-Category'] = entry['sub_category']
+                                st.success("Audit complete! Refreshing view...")
+                                time.sleep(1)
                                 st.rerun()
                     st.divider()
                     st.dataframe(pri_df, use_container_width=True)

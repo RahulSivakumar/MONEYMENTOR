@@ -75,7 +75,7 @@ def tiered_categorizer(description):
 
 def run_ai_agent_batch(descriptions):
     """Sends transactions to Gemini in chunks to handle Rate Limits (429)."""
-    CHUNK_SIZE = 15 
+    CHUNK_SIZE = 30 
     all_results = []
     chunks = [descriptions[i:i + CHUNK_SIZE] for i in range(0, len(descriptions), CHUNK_SIZE)]
     
@@ -106,7 +106,7 @@ def run_ai_agent_batch(descriptions):
             
             # Cooldown to stay under Free Tier RPM limits
             if len(chunks) > 1:
-                time.sleep(3) 
+                time.sleep(5) 
                 
         except Exception as e:
             if "429" in str(e):

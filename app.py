@@ -1,56 +1,30 @@
 import streamlit as st
-import pandas as pd
+import pd
 import numpy as np
 import json
-import io
 import os
 import time
 from google import genai
 from google.genai import types
 from pydantic import BaseModel
 
-# --- 1. AI CLIENT & KEY RECOVERY ---
+# --- 1. AI CLIENT SETUP ---
 def get_api_key():
-    if "GEMINI_API_KEY" in st.secrets:
-        return st.secrets["GEMINI_API_KEY"]
-    elif os.environ.get("GEMINI_API_KEY"):
-        return os.environ.get("GEMINI_API_KEY")
-    return None
+    return st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
 
 api_key = get_api_key()
-
 if api_key:
     client = genai.Client(api_key=api_key)
 else:
-    st.error("⚠️ **API Key Missing!** Please add GEMINI_API_KEY to your Streamlit Cloud Secrets.")
+    st.error("⚠️ API Key Missing in Secrets!")
     st.stop()
 
-# --- 2. STRUCTURED DATA SCHEMAS ---
 class TransactionResult(BaseModel):
     row_index: int
     primary: str
     sub_category: str
 
-# --- 3. THEME & UI CONFIG ---
-st.set_page_config(page_title="MoneyMentor Pro", layout="wide", page_icon="⚡")
-
-st.markdown("""
-    <style>
-    .stApp { background-color: #0a0a0a; color: #FFD700; }
-    [data-testid="stSidebar"] { background: #111111; border-right: 1px solid #FFD700; }
-    .dashboard-title {
-        background: #1a1a1a; padding: 25px; border-radius: 15px;
-        box-shadow: 0 0 20px rgba(255, 215, 0, 0.1);
-        border-bottom: 4px solid #FFD700; margin-bottom: 25px; text-align: center;
-    }
-    .balance-card {
-        background: #1a1a1a; padding: 15px; border-radius: 12px; border: 1px solid #333;
-        height: 100%; display: flex; flex-direction: column; justify-content: center;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- 4. LOGIC ENGINE ---
+# --- 2. CONFIG & HIERARCHY ---
 SUB_CAT_MAP = {
     "Expenses": ["Food", "Fuel", "House exp", "Personal", "Misc"],
     "Income": ["Salary", "Other Credits", "Investment Returns", "House"],
@@ -58,30 +32,26 @@ SUB_CAT_MAP = {
     "Savings": ["Salary Amt", "Extra income"],
     "Action Required": ["Uncategorized"]
 }
-ALL_SUB_CATS = [item for sublist in SUB_CAT_MAP.values() for item in sublist]
+VALID_PRIMARIES = {k.lower(): k for k in SUB_CAT_MAP.keys()}
 
-# Versioning to force UI refresh when state changes
-if 'v' not in st.session_state:
-    st.session_state.v = 0
-
-def run_ai_agent_batch(df_slice):
-    """Sends chunks with indices and strict instructions."""
-    data_to_send = [{"row_index": int(idx), "text": str(row['Description'])} for idx, row in df_slice.iterrows()]
+# --- 3. AI PRE-PROCESSOR ---
+def ai_pre_process(df):
+    """Categorizes the entire dataframe BEFORE displaying it."""
+    data_to_send = [{"row_index": int(idx), "text": str(row['Description'])} for idx, row in df.iterrows()]
     
-    CHUNK_SIZE = 50 
-    all_results = []
+    CHUNK_SIZE = 40 
     chunks = [data_to_send[i:i + CHUNK_SIZE] for i in range(0, len(data_to_send), CHUNK_SIZE)]
     
+    status_box = st.empty()
     progress_bar = st.progress(0.0)
-    status_text = st.empty()
 
     for idx, chunk in enumerate(chunks):
-        status_text.info(f"🚀 AI Agent: Processing Batch {idx+1} of {len(chunks)}...")
+        status_box.info(f"🤖 AI Categorizing: Batch {idx+1} of {len(chunks)}...")
         prompt = f"""
-        Act as a financial expert. Categorize these Indian bank transactions.
-        Allowed Primary Categories ONLY: {list(SUB_CAT_MAP.keys())}
-        Allowed Sub-Categories ONLY: {ALL_SUB_CATS}
-        Instructions: Use the provided 'row_index'. Return JSON list.
+        Act as a financial expert. Categorize these bank transactions.
+        ALLOWED PRIMARY: {list(SUB_CAT_MAP.keys())}
+        ALLOWED SUB: {SUB_CAT_MAP}
+        Return JSON list with 'row_index', 'primary', 'sub_category'.
         Transactions: {json.dumps(chunk)}
         """
         try:
@@ -94,31 +64,34 @@ def run_ai_agent_batch(df_slice):
                     temperature=0.1
                 ),
             )
-            all_results.extend(json.loads(response.text))
-            progress_bar.progress((idx + 1) / len(chunks))
+            results = json.loads(response.text)
             
+            # Apply results directly to the dataframe
+            for entry in results:
+                m_idx = entry['row_index']
+                p_label = str(entry['primary']).strip().lower()
+                if p_label in VALID_PRIMARIES:
+                    df.at[m_idx, 'Primary'] = VALID_PRIMARIES[p_label]
+                    df.at[m_idx, 'Sub-Category'] = entry['sub_category']
+            
+            progress_bar.progress((idx + 1) / len(chunks))
             if idx < len(chunks) - 1:
-                status_text.warning(f"🕒 Resting 12s to avoid Rate Limits...")
-                time.sleep(12) 
+                time.sleep(12) # Rate limit protection
                 
         except Exception as e:
-            if "429" in str(e):
-                status_text.error("🚦 Quota Full. Automatic 20s cooldown...")
-                time.sleep(20)
-            else:
-                st.error(f"AI Agent Error: {e}")
-                return None
-    
-    status_text.empty()
+            st.error(f"AI Error during pre-processing: {e}")
+            break
+            
+    status_box.success("✅ Categorization Complete!")
     progress_bar.empty()
-    return all_results
+    return df
 
-def process_data(df, mapping):
+# --- 4. DATA LOADING ---
+def process_raw_file(df, mapping):
     std = pd.DataFrame()
     df.columns = [c.strip() for c in df.columns]
     std['Date'] = df[mapping['date']]
     std['Description'] = df[mapping['description']]
-    
     for col in ['Debit', 'Credit']:
         std[col] = pd.to_numeric(df[mapping[col.lower()]].astype(str).replace('[₹, ]', '', regex=True), errors='coerce').fillna(0.0)
     
@@ -126,75 +99,51 @@ def process_data(df, mapping):
     std['Sub-Category'] = "Uncategorized"
     return std
 
-# --- 5. SIDEBAR ---
+# --- 5. UI ---
+st.set_page_config(page_title="MoneyMentor Pro", layout="wide")
+st.title("🏦 MoneyMentor Pro")
+
 with st.sidebar:
-    st.markdown("### 🛠️ Workspace Controls")
-    bank_choice = st.selectbox("Institution", ["HDFC Bank", "ICICI Bank", "SBI"])
+    st.header("1. Data Input")
+    bank = st.selectbox("Bank", ["HDFC Bank", "ICICI Bank", "SBI"])
     MAPPINGS = {
         "HDFC Bank": {"date": "Date", "description": "Narration", "debit": "Withdrawal Amt.", "credit": "Deposit Amt."},
         "ICICI Bank": {"date": "Value Date", "description": "Description", "debit": "Debit", "credit": "Credit"},
         "SBI": {"date": "Date", "description": "Description", "debit": "Debit", "credit": "Credit"}
     }
-    file = st.file_uploader("Drop Statement", type=['csv', 'xlsx'])
-    if st.button("🚀 Run Smart Audit") and file:
-        try:
-            df_raw = pd.read_csv(file) if file.name.endswith('.csv') else pd.read_excel(file)
-            st.session_state.main_df = process_data(df_raw, MAPPINGS[bank_choice])
-            st.session_state.v += 1
-        except Exception as e:
-            st.error(f"Parsing Error: {e}")
+    file = st.file_uploader("Upload Statement", type=['csv', 'xlsx'])
+    
+    if st.button("🚀 Process & Categorize") and file:
+        # Step A: Load Raw Data
+        df_raw = pd.read_csv(file) if file.name.endswith('.csv') else pd.read_excel(file)
+        processed_df = process_raw_file(df_raw, MAPPINGS[bank])
+        
+        # Step B: Run AI immediately before saving to session state
+        st.session_state.main_df = ai_pre_process(processed_df)
+        st.rerun()
 
-# --- 6. MAIN DASHBOARD ---
-st.markdown("""<div class="dashboard-title"><h1>🏦 MoneyMentor <span style='color:#FFD700;'>Pro</span></h1></div>""", unsafe_allow_html=True)
-
+# --- 6. DASHBOARD ---
 if 'main_df' in st.session_state:
-    # Double-buffer: work with a copy for the UI
-    current_df = st.session_state.main_df.copy()
-
-    tab1, tab2 = st.tabs(["📝 Master Data Editor", "📊 Advanced Summary"])
-
-    def get_cfg(sub_options):
-        return {
-            "Primary": st.column_config.SelectboxColumn("Primary", options=list(SUB_CAT_MAP.keys()), required=True),
-            "Sub-Category": st.column_config.SelectboxColumn("Sub-Category", options=sub_options, required=True),
-            "Debit": st.column_config.NumberColumn("Debit", format="₹%.2f"),
-            "Credit": st.column_config.NumberColumn("Credit", format="₹%.2f"),
-        }
-
+    # Use tabs to organize the view
+    tab1, tab2 = st.tabs(["📝 Final Review", "📊 Spending Summary"])
+    
     with tab1:
-        # Dynamic Key f"v{st.session_state.v}" forces widget to reset after AI runs
-        edited_df = st.data_editor(
-            current_df, 
-            column_config=get_cfg(ALL_SUB_CATS), 
-            use_container_width=True, 
-            key=f"editor_v{st.session_state.v}"
-        )
-        if not edited_df.equals(st.session_state.main_df):
-            st.session_state.main_df = edited_df
+        st.subheader("Master Audit Log")
+        # Direct data editor - any manual fixes here will save correctly
+        updated_df = st.data_editor(st.session_state.main_df, use_container_width=True)
+        if not updated_df.equals(st.session_state.main_df):
+            st.session_state.main_df = updated_df
             st.rerun()
-
-    with tab2:
-        present_categories = sorted(current_df['Primary'].unique())
-        for pri in present_categories:
-            pri_df = current_df[current_df['Primary'] == pri]
             
-            with st.expander(f"📂 {pri.upper()} ({len(pri_df)} items)"):
-                if pri == "Action Required":
-                    if st.button("⚡ Run AI Auto-Pilot", type="primary", key=f"ai_btn_v{st.session_state.v}"):
-                        results = run_ai_agent_batch(pri_df)
-                        if results:
-                            # Direct update into the Master Session State
-                            for entry in results:
-                                if entry['primary'] in SUB_CAT_MAP:
-                                    st.session_state.main_df.at[entry['row_index'], 'Primary'] = entry['primary']
-                                    st.session_state.main_df.at[entry['row_index'], 'Sub-Category'] = entry['sub_category']
-                            
-                            # Increment version to "kill" the old editor and force refresh
-                            st.session_state.v += 1
-                            st.success("Refining complete!")
-                            st.rerun()
-                    st.dataframe(pri_df, use_container_width=True)
-                else:
-                    st.dataframe(pri_df, use_container_width=True)
+    with tab2:
+        # Automated summary view based on AI results
+        cols = st.columns(len(SUB_CAT_MAP) - 1)
+        for i, (pri, subs) in enumerate(list(SUB_CAT_MAP.items())[:-1]):
+            with cols[i]:
+                amt = st.session_state.main_df[st.session_state.main_df['Primary'] == pri]['Debit'].sum()
+                st.metric(pri, f"₹{amt:,.0f}")
+        
+        st.divider()
+        st.dataframe(st.session_state.main_df, use_container_width=True)
 else:
-    st.info("👋 Upload a statement in the sidebar to begin.")
+    st.info("Upload a statement. The AI will categorize everything before it appears.")

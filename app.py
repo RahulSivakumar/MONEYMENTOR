@@ -1,11 +1,26 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import requests
+import json
 import io
+from google import genai
+from google.genai import types
+from pydantic import BaseModel
 
-# --- 1. THEME & ADVANCED CSS ---
-st.set_page_config(page_title="MoneyMentor Pro", layout="wide", page_icon="⚡", initial_sidebar_state="expanded")
+# --- 1. AI CLIENT & SCHEMA ---
+# Pulls key from .streamlit/secrets.toml
+try:
+    client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+except Exception:
+    st.error("API Key missing! Please add GEMINI_API_KEY to .streamlit/secrets.toml")
+    st.stop()
+
+class CategorizedTransaction(BaseModel):
+    primary: str
+    sub_category: str
+
+# --- 2. THEME & ADVANCED CSS ---
+st.set_page_config(page_title="MoneyMentor Pro", layout="wide", page_icon="⚡")
 
 st.markdown("""
     <style>
@@ -16,8 +31,6 @@ st.markdown("""
         box-shadow: 0 0 20px rgba(255, 215, 0, 0.1);
         border-bottom: 4px solid #FFD700; margin-bottom: 25px; text-align: center;
     }
-    [data-testid="stMetric"] { background: #1a1a1a !important; padding: 15px; border-radius: 12px; border: 1px solid #333; }
-    [data-testid="stMetricValue"] > div { color: #FFD700 !important; }
     .balance-card {
         background: #1a1a1a; padding: 15px; border-radius: 12px; border: 1px solid #333;
         height: 100%; display: flex; flex-direction: column; justify-content: center;
@@ -25,7 +38,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. LOGIC ENGINE ---
+# --- 3. LOGIC ENGINE ---
 SUB_CAT_MAP = {
     "Expenses": ["Food", "Fuel", "House exp", "Personal", "Misc"],
     "Income": ["Salary", "Other Credits", "Investment Returns", "House"],
@@ -48,6 +61,32 @@ def tiered_categorizer(description):
         if kw in desc: return mapping[0], mapping[1]
     return "Action Required", "Uncategorized"
 
+def run_ai_agent_batch(descriptions):
+    """Sends a batch of transaction strings to Gemini for categorization."""
+    prompt = f"""
+    Act as a financial expert for an Indian user. Categorize these bank transactions.
+    Allowed Categories: {json.dumps(SUB_CAT_MAP)}
+    Instructions: 
+    - Use Indian context (Zomato/Swiggy/Blinkit = Food).
+    - If it's a person transfer, use 'Misc'.
+    - If it's Stock/MF/SIP, use 'Investment'.
+    Transactions: {json.dumps(descriptions)}
+    """
+    try:
+        response = client.models.generate_content(
+            model='gemini-2.0-flash',
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=dict[str, CategorizedTransaction],
+                temperature=0.1
+            ),
+        )
+        return json.loads(response.text)
+    except Exception as e:
+        st.error(f"AI Agent Error: {e}")
+        return None
+
 def process_data(df, mapping):
     std = pd.DataFrame()
     std['Date'] = df[mapping['date']]
@@ -60,7 +99,7 @@ def process_data(df, mapping):
     std['Primary'], std['Sub-Category'] = zip(*res)
     return std
 
-# --- 3. SIDEBAR ---
+# --- 4. SIDEBAR ---
 with st.sidebar:
     st.markdown("### 🛠️ Workspace Controls")
     bank_choice = st.selectbox("Institution", ["HDFC Bank", "ICICI Bank", "SBI"])
@@ -74,25 +113,17 @@ with st.sidebar:
         df_raw = pd.read_csv(file) if file.name.endswith('.csv') else pd.read_excel(file)
         st.session_state.main_df = process_data(df_raw, MAPPINGS[bank_choice])
 
-# --- 4. MAIN DASHBOARD ---
+# --- 5. MAIN DASHBOARD ---
 st.markdown("""<div class="dashboard-title"><h1>🏦 MoneyMentor <span style='color:#FFD700;'>Pro</span></h1></div>""", unsafe_allow_html=True)
 
 if 'main_df' in st.session_state:
-    # Always work on the session state directly to ensure data persistence
-    
     # Balance UI
     total_out, total_in = st.session_state.main_df['Debit'].sum(), st.session_state.main_df['Credit'].sum()
-    if 'RunningBalance' in st.session_state.main_df.columns:
-        closing_bal = st.session_state.main_df['RunningBalance'].iloc[-1]
-        first_row = st.session_state.main_df.iloc[0]
-        opening_bal = first_row['RunningBalance'] - first_row['Credit'] + first_row['Debit']
-    else:
-        opening_bal = 0.0
-        closing_bal = total_in - total_out
-
+    closing_bal = st.session_state.main_df['RunningBalance'].iloc[-1] if 'RunningBalance' in st.session_state.main_df.columns else (total_in - total_out)
+    
     c_open, c_close = st.columns(2)
-    with c_open: st.markdown(f"""<div class="balance-card"><p style="color:#888;margin:0;font-size:0.8rem;">OPENING BALANCE</p><h2 style="color:#FFF;margin:0;">₹{opening_bal:,.2f}</h2></div>""", unsafe_allow_html=True)
-    with c_close: st.markdown(f"""<div class="balance-card" style="border: 1px solid #FFD700;"><p style="color:#FFD700;margin:0;font-size:0.8rem;">CLOSING BALANCE</p><h2 style="color:#FFD700;margin:0;">₹{closing_bal:,.2f}</h2></div>""", unsafe_allow_html=True)
+    with c_open: st.markdown(f"""<div class="balance-card"><p style="color:#888;margin:0;font-size:0.8rem;">TOTAL INFLOW</p><h2 style="color:#FFF;margin:0;">₹{total_in:,.2f}</h2></div>""", unsafe_allow_html=True)
+    with c_close: st.markdown(f"""<div class="balance-card" style="border: 1px solid #FFD700;"><p style="color:#FFD700;margin:0;font-size:0.8rem;">ESTIMATED CLOSING</p><h2 style="color:#FFD700;margin:0;">₹{closing_bal:,.2f}</h2></div>""", unsafe_allow_html=True)
 
     tab1, tab2 = st.tabs(["📝 Master Data Editor", "📊 Advanced Summary"])
 
@@ -113,8 +144,6 @@ if 'main_df' in st.session_state:
 
     with tab2:
         st.subheader("Dynamic Financial Pillars")
-        
-        # Get dynamic categories based on current session state
         present_categories = sorted(st.session_state.main_df['Primary'].unique())
         
         for pri in present_categories:
@@ -123,55 +152,27 @@ if 'main_df' in st.session_state:
             
             with st.expander(f"📂 {pri.upper()} — Total: ₹{total_val:,.2f} ({len(pri_df)} items)"):
                 if pri == "Action Required":
-                    st.markdown("### 🤖 Single-Item AI Categorizer")
+                    st.markdown("### 🤖 AI Smart Categorizer")
+                    uncategorized_items = pri_df['Description'].unique().tolist()
                     
-                    if not pri_df.empty:
-                        selected_desc = st.selectbox("Select Transaction to Categorize", pri_df['Description'].unique(), key="ai_select_box")
-                        
-                        col_ai1, col_ai2 = st.columns(2)
-                        
-                        with col_ai1:
-                            if st.button("⚡ Send Selected to n8n"):
-                                target_row = pri_df[pri_df['Description'] == selected_desc].iloc[0]
-                                webhook_url = "https://moneymentor.app.n8n.cloud/webhook-test/208f0cbb-a2cd-435a-bce1-c79def3e971b"
-                                payload = {"Description": target_row['Description'], "Debit": target_row['Debit'], "Credit": target_row['Credit']}
-                                try:
-                                    requests.post(webhook_url, json=payload)
-                                    st.toast(f"Sent '{selected_desc}' to n8n!", icon="🚀")
-                                except: st.error("Webhook failed")
-
-                        with col_ai2:
-                            if st.button("🔄 Sync AI Output & Move Transaction"):
-                                SHEET_ID = "10U-ddKGb_GllE0A3NXwhGCHeJssG3kdcujjftDAMQNY"
-                                GID = "90265671"
-                                csv_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}"
-                                try:
-                                    response = requests.get(csv_url)
-                                    sheet_df = pd.read_csv(io.StringIO(response.text))
-                                    
-                                    if not sheet_df.empty:
-                                        # Get latest AI output
-                                        latest_output = sheet_df.iloc[-1]
-                                        new_pri = str(latest_output.get('Primary', 'Action Required')).strip()
-                                        new_sub = str(latest_output.get('Sub-Category', 'Uncategorized')).strip()
-                                        
-                                        # Force update to st.session_state.main_df
-                                        idx = st.session_state.main_df[st.session_state.main_df['Description'] == selected_desc].index
-                                        st.session_state.main_df.loc[idx, 'Primary'] = new_pri
-                                        st.session_state.main_df.loc[idx, 'Sub-Category'] = new_sub
-                                        
-                                        st.success(f"Success! '{selected_desc}' moved to {new_pri} > {new_sub}")
-                                        # st.rerun() is critical here to move the item to the new folder
-                                        st.rerun()
-                                except Exception as e: st.error(f"Sync error: {e}")
-                    
+                    if st.button("⚡ Run AI Auto-Pilot", type="primary", key="ai_btn"):
+                        if uncategorized_items:
+                            with st.spinner(f"Agent analyzing {len(uncategorized_items)} transactions..."):
+                                ai_results = run_ai_agent_batch(uncategorized_items)
+                                if ai_results:
+                                    for desc, mapping in ai_results.items():
+                                        rows = st.session_state.main_df['Description'] == desc
+                                        st.session_state.main_df.loc[rows, 'Primary'] = mapping['primary']
+                                        st.session_state.main_df.loc[rows, 'Sub-Category'] = mapping['sub_category']
+                                    st.success("Categorization Complete!")
+                                    st.rerun()
+                        else:
+                            st.info("No items require AI action.")
                     st.divider()
                     st.dataframe(pri_df, use_container_width=True)
-
                 else:
                     sub_edited = st.data_editor(pri_df, column_config=get_cfg(SUB_CAT_MAP.get(pri, ALL_SUB_CATS)), use_container_width=True, key=f"edit_{pri}")
                     if not sub_edited.equals(pri_df):
-                        # Sync individual folder edits back to main session state
                         st.session_state.main_df.update(sub_edited)
                         st.rerun()
 else:

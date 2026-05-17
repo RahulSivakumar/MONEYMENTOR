@@ -8,3 +8,6 @@ langchain-openai
 python-dotenv
 google-generativeai
 matplotlib
+google-genai
+pydantic
+numpy

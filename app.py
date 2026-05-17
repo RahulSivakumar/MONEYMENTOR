@@ -16,7 +16,7 @@ api_key = get_api_key()
 if api_key:
     client = genai.Client(api_key=api_key)
 else:
-    st.error("⚠️ API Key Missing!")
+    st.error("⚠️ API Key Missing in Secrets!")
     st.stop()
 
 class TransactionResult(BaseModel):
@@ -27,7 +27,6 @@ class TransactionResult(BaseModel):
 # --- 2. CONFIG & THEME ---
 st.set_page_config(page_title="MoneyMentor Pro", layout="wide", page_icon="⚡")
 
-# Restore the Black & Gold UI
 st.markdown("""
     <style>
     .stApp { background-color: #0a0a0a; color: #FFD700; }
@@ -54,9 +53,32 @@ SUB_CAT_MAP = {
 ALL_SUB_CATS = [item for sublist in SUB_CAT_MAP.values() for item in sublist]
 VALID_PRIMARIES = {k.lower(): k for k in SUB_CAT_MAP.keys()}
 
-# --- 3. LOGIC ENGINE ---
+# Manual Keywords (First Layer of Defense)
+MANUAL_RULES = {
+    "zomato": ["Expenses", "Food"],
+    "swiggy": ["Expenses", "Food"],
+    "blinkit": ["Expenses", "Food"],
+    "hpcl": ["Expenses", "Fuel"],
+    "bpcl": ["Expenses", "Fuel"],
+    "salary": ["Income", "Salary"],
+    "zerodha": ["Investment", "Stock"],
+    "groww": ["Investment", "Mutual Funds"],
+    "quant": ["Investment", "Mutual Funds"]
+}
+
+# --- 3. AI CORE ENGINE ---
 def ai_pre_process(df):
-    data_to_send = [{"row_index": int(idx), "text": str(row['Description'])} for idx, row in df.iterrows()]
+    """Categorizes the entire dataframe BEFORE displaying it."""
+    # Reset index to ensure a clean mapping between AI and Dataframe
+    df = df.reset_index(drop=True)
+    
+    # We only send items that weren't caught by the manual rules
+    pending_items = df[df['Primary'] == "Action Required"]
+    
+    if pending_items.empty:
+        return df
+
+    data_to_send = [{"row_index": int(idx), "text": str(row['Description'])} for idx, row in pending_items.iterrows()]
     CHUNK_SIZE = 40 
     chunks = [data_to_send[i:i + CHUNK_SIZE] for i in range(0, len(data_to_send), CHUNK_SIZE)]
     
@@ -64,7 +86,7 @@ def ai_pre_process(df):
     progress_bar = st.progress(0.0)
 
     for idx, chunk in enumerate(chunks):
-        status_box.info(f"🤖 AI Categorizing: Batch {idx+1} of {len(chunks)}...")
+        status_box.info(f"🤖 AI Categorizing Leftovers: Batch {idx+1} of {len(chunks)}...")
         prompt = f"""
         Act as a financial expert. Categorize these bank transactions.
         ALLOWED PRIMARY: {list(SUB_CAT_MAP.keys())}
@@ -92,10 +114,9 @@ def ai_pre_process(df):
             
             progress_bar.progress((idx + 1) / len(chunks))
             if idx < len(chunks) - 1:
-                time.sleep(12) # Rate limit cooldown
-                
+                time.sleep(12) 
         except Exception as e:
-            st.error(f"AI Error: {e}")
+            st.error(f"AI Mapping Error: {e}")
             break
             
     status_box.empty()
@@ -108,15 +129,23 @@ def process_initial_data(df, mapping):
     std['Date'] = df[mapping['date']]
     std['Description'] = df[mapping['description']]
     
-    # Extract Balance if available
+    # Extract Balance
     if 'balance' in mapping and mapping['balance'] in df.columns:
         std['RunningBalance'] = pd.to_numeric(df[mapping['balance']].astype(str).replace('[₹, ]', '', regex=True), errors='coerce').fillna(0.0)
     
     for col in ['Debit', 'Credit']:
         std[col] = pd.to_numeric(df[mapping[col.lower()]].astype(str).replace('[₹, ]', '', regex=True), errors='coerce').fillna(0.0)
     
-    std['Primary'] = "Action Required"
-    std['Sub-Category'] = "Uncategorized"
+    # Apply Manual Rules First
+    def apply_rules(row):
+        desc = row['Description'].lower()
+        for kw, result in MANUAL_RULES.items():
+            if kw in desc:
+                return result[0], result[1]
+        return "Action Required", "Uncategorized"
+
+    results = std.apply(apply_rules, axis=1)
+    std['Primary'], std['Sub-Category'] = zip(*results)
     return std
 
 # --- 4. SIDEBAR ---
@@ -140,7 +169,7 @@ with st.sidebar:
 st.markdown("""<div class="dashboard-title"><h1>🏦 MoneyMentor <span style='color:#FFD700;'>Pro</span></h1></div>""", unsafe_allow_html=True)
 
 if 'main_df' in st.session_state:
-    # Restored Balance Metrics
+    # Metrics
     total_out, total_in = st.session_state.main_df['Debit'].sum(), st.session_state.main_df['Credit'].sum()
     closing_bal = st.session_state.main_df['RunningBalance'].iloc[-1] if 'RunningBalance' in st.session_state.main_df.columns else (total_in - total_out)
     
@@ -173,10 +202,10 @@ if 'main_df' in st.session_state:
             total_val = pri_df['Credit'].sum() if pri in ["Income", "Savings"] else pri_df['Debit'].sum()
             
             with st.expander(f"📂 {pri.upper()} — Total: ₹{total_val:,.2f} ({len(pri_df)} items)"):
-                # Use data_editor inside folders so manual fixes update main state
+                # Manual edits inside folders
                 sub_edit = st.data_editor(pri_df, column_config=get_cfg(SUB_CAT_MAP.get(pri, ALL_SUB_CATS)), use_container_width=True, key=f"edit_{pri}")
                 if not sub_edit.equals(pri_df):
                     st.session_state.main_df.update(sub_edit)
                     st.rerun()
 else:
-    st.info("👋 Welcome Rahul! Upload a statement in the sidebar to begin. AI will categorize everything before display.")
+    st.info("👋 Welcome Rahul! Upload a bank statement in the sidebar to begin.")
